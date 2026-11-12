@@ -83,6 +83,20 @@ test('storage round-trips a value through its persisted map', async () => {
   assert.deepEqual(get.result.value, { n: 1 });
 });
 
+test('a plugin works with empty params, as opurom-core invokes it', async () => {
+  // opurom-core calls `invoke` with `{}`; every capability must answer without params.
+  const cases = [
+    { binary: 'plugins/camera/bin/camera', capability: 'camera.takePhoto' },
+    { binary: 'plugins/notification/bin/notification', capability: 'notification.show' },
+    { binary: 'plugins/storage/bin/storage', capability: 'storage.put' },
+    { binary: 'plugins/storage/bin/storage', capability: 'storage.get' },
+  ];
+  for (const plugin of cases) {
+    const result = await invokeCapability(binaryOf(plugin.binary), plugin.capability, {});
+    assert.equal(result.ok, true, `${plugin.capability}: ${result.error}`);
+  }
+});
+
 test('an unknown capability is rejected with the documented error', async () => {
   for (const plugin of PLUGINS) {
     const result = await invokeCapability(binaryOf(plugin.binary), `${plugin.name}.nope`, {});

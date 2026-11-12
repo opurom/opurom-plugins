@@ -9,6 +9,7 @@ use std::path::PathBuf;
 const NAME: &str = "storage";
 const VERSION: &str = "0.1.0";
 const CAPABILITIES: &[&str] = &["storage.put", "storage.get"];
+const DEFAULT_KEY: &str = "default";
 
 fn main() {
     let stdin = io::stdin();
@@ -122,18 +123,16 @@ fn invoke(capability: &str, params: &Json) -> Result<Json, String> {
     if !matches!(capability, "storage.put" | "storage.get") {
         return Err(format!("unknown capability: {capability}"));
     }
+    // shortcut: an absent key means the default key, upgrade when keys become mandatory.
     let key = params
         .get("key")
         .and_then(Json::as_str)
-        .ok_or("storage: missing string key")?;
+        .unwrap_or(DEFAULT_KEY);
     let path = state_path()?;
     let mut fields = load(&path);
     match capability {
         "storage.put" => {
-            let value = params
-                .get("value")
-                .cloned()
-                .ok_or("storage: missing value")?;
+            let value = params.get("value").cloned().unwrap_or(Json::Null);
             if let Some((_, existing)) = fields.iter_mut().find(|(name, _)| name.as_str() == key) {
                 *existing = value.clone();
             } else {
