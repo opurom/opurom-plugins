@@ -1,0 +1,8 @@
+{
+  "name": "notification",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "capabilities": ["notification.show"],
+  "entry": "./bin/notification",
+  "description": "Simulated desktop notification"
+}

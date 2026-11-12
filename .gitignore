@@ -1,0 +1,11 @@
+# Build artifacts. The binaries are rebuilt by scripts/build.sh and by CLI verify.
+target/
+Cargo.lock
+
+# Built plugin executables. The root CLI source stays tracked.
+/bin/*
+!/bin/opurom-plugin.mjs
+/plugins/*/bin/
+/plugins/*/tmp/
+
+.DS_Store
