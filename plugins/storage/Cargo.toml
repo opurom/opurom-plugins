@@ -1,0 +1,11 @@
+[package]
+name = "opurom-plugin-storage"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "storage"
+path = "src/main.rs"
+
+[dependencies]

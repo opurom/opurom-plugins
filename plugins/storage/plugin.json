@@ -1,0 +1,8 @@
+{
+  "name": "storage",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "capabilities": ["storage.put", "storage.get"],
+  "entry": "./bin/storage",
+  "description": "Simulated key-value storage persisted in the plugin directory"
+}

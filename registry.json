@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "name": "camera",
+      "version": "0.1.0",
+      "path": "plugins/camera",
+      "capabilities": ["camera.takePhoto"]
+    },
+    {
+      "name": "notification",
+      "version": "0.1.0",
+      "path": "plugins/notification",
+      "capabilities": ["notification.show"]
+    },
+    {
+      "name": "storage",
+      "version": "0.1.0",
+      "path": "plugins/storage",
+      "capabilities": ["storage.put", "storage.get"]
+    }
+  ]
+}
