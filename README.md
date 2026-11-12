@@ -168,3 +168,17 @@ What it does **not** do (R3+):
   rewritten without locking);
 - the timeout applies to the CLI's own requests only — the `opurom-core` plugin
   host keeps its own 500 ms default.
+
+## Integration with `opurom-core`
+
+`opurom-core plugins <pluginDir> <capability>` loads a plugin from this repo,
+performs the handshake and invokes the capability with empty params:
+
+```bash
+../opurom-core/target/release/opurom-core plugins plugins/camera camera.takePhoto
+../opurom-core/target/release/opurom-core plugins plugins/notification notification.show
+../opurom-core/target/release/opurom-core plugins plugins/storage storage.get
+```
+
+Every capability answers with empty params: `storage` falls back to the key
+`default` when no key is given.
