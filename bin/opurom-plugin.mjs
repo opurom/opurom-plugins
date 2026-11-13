@@ -23,8 +23,8 @@ const USAGE = `usage: opurom-plugin <command>
 
   list                              show the plugins in registry.json
   verify                            check every registry entry (manifest, executable, handshake, invoke)
-  invoke <plugin> <capability> [json-params] [--grant csv]
-                                    invoke; --grant uses the explicit permission host
+  invoke <plugin> <capability> [json-params] [--grant csv] [--deny csv]
+                                    invoke; --grant/--deny use the permission host
 
 environment:
   OPR_PLUGIN_BIN      "camera=/abs/path,storage=/abs/path" overrides plugin executables
@@ -35,28 +35,37 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
-/** Pull --grant out of the optional invoke arguments without disturbing JSON params. */
-function parseGrantArgs(parts) {
+function splitList(value) {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+/** Pull --grant/--deny out of the optional invoke arguments without disturbing JSON params. */
+function parseInvokeArgs(parts) {
   const params = [];
   let grants = null;
+  let denies = [];
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index];
-    if (part === '--grant') {
-      if (index + 1 >= parts.length) fail('--grant needs a comma-separated capability list');
-      grants = parts[index + 1].split(',').map((item) => item.trim()).filter(Boolean);
+    if (part === '--grant' || part === '--deny') {
+      if (index + 1 >= parts.length) fail(`${part} needs a comma-separated capability list`);
+      const list = splitList(parts[index + 1]);
+      if (part === '--grant') grants = list;
+      else denies = list;
       index += 1;
     } else if (part.startsWith('--grant=')) {
-      grants = part.slice('--grant='.length).split(',').map((item) => item.trim()).filter(Boolean);
+      grants = splitList(part.slice('--grant='.length));
+    } else if (part.startsWith('--deny=')) {
+      denies = splitList(part.slice('--deny='.length));
     } else {
       params.push(part);
     }
   }
-  return { params, grants };
+  return { params, grants, denies };
 }
 
 function capabilityError(err) {
   const error = { code: err.code ?? 'ERR_UNKNOWN', message: err.message };
-  for (const key of ['capability', 'reason', 'plugin', 'retryAfterMs']) {
+  for (const key of ['capability', 'reason', 'plugin', 'retryAfterMs', 'errors']) {
     if (err[key] !== undefined) error[key] = err[key];
   }
   return error;
@@ -123,22 +132,23 @@ async function commandInvoke(root, pluginName, capability, paramParts, options) 
     }
   }
 
-  if (options.grants !== null) {
-    const host = new CapabilityHost({
-      grants: options.grants,
-      root,
-      overrides: options.overrides,
-      timeoutMs: options.timeoutMs,
-    });
+  if (options.grants !== null || options.denies.length > 0) {
+    let host = null;
     let code = 0;
     try {
+      host = new CapabilityHost({
+        permissions: { allow: options.grants ?? [], deny: options.denies },
+        root,
+        overrides: options.overrides,
+        timeoutMs: options.timeoutMs,
+      });
       const result = await host.invoke(capability, params);
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } catch (err) {
       process.stdout.write(`${JSON.stringify({ ok: false, error: capabilityError(err) })}\n`);
       code = 1;
     }
-    await host.close();
+    if (host) await host.close();
     process.exit(code);
   }
 
@@ -185,7 +195,7 @@ async function main(argv) {
   const root = ROOT;
   const overrides = parseBinaryOverrides(process.env.OPR_PLUGIN_BIN);
   const timeoutMs = resolveTimeout(process.env.OPR_PLUGIN_TIMEOUT_MS);
-  const options = { overrides, timeoutMs, grants: null };
+  const options = { overrides, timeoutMs, grants: null, denies: [] };
   const [command, ...rest] = argv;
 
   if (!command || command === 'help' || command === '--help' || command === '-h') {
@@ -203,8 +213,8 @@ async function main(argv) {
     if (!pluginName || !capability) {
       fail('invoke needs <plugin> <capability> [json-params]');
     }
-    const { params, grants } = parseGrantArgs(rawParams);
-    await commandInvoke(root, pluginName, capability, params, { ...options, grants });
+    const { params, grants, denies } = parseInvokeArgs(rawParams);
+    await commandInvoke(root, pluginName, capability, params, { ...options, grants, denies });
   }
   fail(`unknown command: ${command}\n${USAGE}`, 2);
 }

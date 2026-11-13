@@ -10,6 +10,8 @@ import {
   CapabilityHost,
   CapabilityUndeclaredError,
   CircuitOpenError,
+  PermissionManifestError,
+  validatePermissionManifest,
 } from '../lib/capabilities.mjs';
 import { PluginCrashError, PluginProtocolError, ROOT, loadRegistry, readManifest } from '../lib/host.mjs';
 import { runCli } from '../test-support/helpers.mjs';
@@ -43,7 +45,10 @@ async function withFixtureHost(options, fn) {
   const stateDir = mkdtempSync(path.join(tmpdir(), 'opurom-capability-'));
   writeFileSync(path.join(stateDir, 'schedule'), `${options.schedule}\n`);
   const host = new CapabilityHost({
-    grants: options.grants ?? ['camera.takePhoto'],
+    permissions: {
+      allow: options.grants ?? ['camera.takePhoto'],
+      deny: options.denies ?? [],
+    },
     root: ROOT,
     overrides: fixtureOverrides(),
     timeoutMs: 1000,
@@ -135,6 +140,116 @@ test('permission matrix denies ungranted and undeclared capabilities without spa
   });
 });
 
+test('a capability that is both allowed and denied is denied before any spawn', async () => {
+  await withFixtureHost({ schedule: 'ok', denies: ['camera.takePhoto'] }, async ({ host, stateDir }) => {
+    assert.deepEqual(host.check('camera.takePhoto'), { allowed: false, reason: 'explicit-deny' });
+    await assert.rejects(
+      () => host.invoke('camera.takePhoto'),
+      (err) => {
+        assert.ok(err instanceof CapabilityDeniedError);
+        assert.equal(err.code, 'ERR_CAPABILITY_DENIED');
+        assert.equal(err.reason, 'explicit-deny');
+        assert.match(err.message, /explicitly denied/);
+        return true;
+      },
+    );
+    assert.equal(host.spawnCount, 0);
+    assert.equal(existsSync(path.join(stateDir, 'started')), false);
+  });
+});
+
+test('an unrelated deny does not revoke a granted capability', async () => {
+  await withFixtureHost({ schedule: 'ok', denies: ['share.send'] }, async ({ host }) => {
+    const result = await host.invoke('camera.takePhoto');
+    assert.equal(result.mock, true);
+    assert.equal(host.spawnCount, 1);
+  });
+});
+
+test('an undeclared capability is denied by default without spawning', async () => {
+  const host = new CapabilityHost({ permissions: { allow: [], deny: [] }, root: ROOT });
+  try {
+    for (const capability of CAPABILITIES) {
+      assert.deepEqual(host.check(capability), { allowed: false, reason: 'not-granted' });
+      await assert.rejects(
+        () => host.invoke(capability),
+        (err) => err instanceof CapabilityDeniedError && err.reason === 'not-granted',
+      );
+    }
+    assert.deepEqual(host.check('camera.nope'), { allowed: false, reason: 'undeclared' });
+    await assert.rejects(
+      () => host.invoke('camera.nope'),
+      (err) => err instanceof CapabilityUndeclaredError && err.code === 'ERR_CAPABILITY_UNDECLARED',
+    );
+    assert.equal(host.spawnCount, 0);
+  } finally {
+    await host.close();
+  }
+});
+
+test('a malformed permission manifest is rejected with a typed, clear error', () => {
+  const cases = [
+    [null, 'manifest must be a JSON object'],
+    [[], 'manifest must be a JSON object'],
+    [{ allow: 'camera.takePhoto' }, 'allow must be an array'],
+    [{ deny: 7 }, 'deny must be an array'],
+    [{ allow: [42] }, 'allow contains an unknown capability'],
+    [{ deny: ['camera.nope'] }, 'deny contains an unknown capability'],
+    [{ allows: ['camera.takePhoto'] }, 'unknown permission manifest field'],
+  ];
+  for (const [manifest, needle] of cases) {
+    assert.ok(validatePermissionManifest(manifest).join('; ').includes(needle));
+    assert.throws(
+      () => new CapabilityHost({ permissions: manifest, root: ROOT }),
+      (err) => {
+        assert.ok(err instanceof PermissionManifestError);
+        assert.equal(err.code, 'ERR_PERMISSION_MANIFEST');
+        assert.ok(err.message.includes(needle), err.message);
+        assert.ok(Array.isArray(err.errors) && err.errors.length > 0);
+        return true;
+      },
+    );
+  }
+  assert.throws(() => new CapabilityHost({ grants: 'camera.takePhoto' }), PermissionManifestError);
+  assert.deepEqual(
+    validatePermissionManifest({ allow: ['camera.takePhoto'], deny: ['share.send'] }),
+    [],
+  );
+});
+
+test('permission checks are deterministic under repeated calls', async () => {
+  const host = new CapabilityHost({
+    permissions: {
+      allow: ['camera.takePhoto', 'payment.request'],
+      deny: ['payment.request'],
+    },
+    root: ROOT,
+  });
+  const decisions = [
+    ['camera.takePhoto', { allowed: true, reason: 'granted' }],
+    ['payment.request', { allowed: false, reason: 'explicit-deny' }],
+    ['share.send', { allowed: false, reason: 'not-granted' }],
+    ['camera.nope', { allowed: false, reason: 'undeclared' }],
+  ];
+  try {
+    for (let round = 0; round < 20; round += 1) {
+      for (const [capability, expected] of decisions) {
+        assert.deepEqual(host.check(capability), expected, `${capability} in round ${round}`);
+      }
+      await assert.rejects(
+        () => host.invoke('payment.request'),
+        (err) => err instanceof CapabilityDeniedError && err.reason === 'explicit-deny',
+      );
+    }
+    for (const [capability, expected] of decisions) {
+      assert.deepEqual(host.check(capability), expected, `${capability} after repeated denials`);
+    }
+    assert.equal(host.spawnCount, 0);
+  } finally {
+    await host.close();
+  }
+});
+
 test('CLI --grant allows a capability and deny is a typed error', async () => {
   const granted = await runCli([
     'invoke',
@@ -160,6 +275,56 @@ test('CLI --grant allows a capability and deny is a typed error', async () => {
   assert.equal(body.ok, false);
   assert.equal(body.error.code, 'ERR_CAPABILITY_DENIED');
   assert.equal(body.error.capability, 'camera.takePhoto');
+});
+
+test('CLI --deny overrides a matching --grant', async () => {
+  const denied = await runCli([
+    'invoke',
+    'camera',
+    'camera.takePhoto',
+    '{}',
+    '--grant',
+    'camera.takePhoto',
+    '--deny',
+    'camera.takePhoto',
+  ]);
+  assert.equal(denied.code, 1);
+  const body = JSON.parse(denied.stdout);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'ERR_CAPABILITY_DENIED');
+  assert.equal(body.error.reason, 'explicit-deny');
+  assert.equal(body.error.capability, 'camera.takePhoto');
+
+  const denyOnly = await runCli([
+    'invoke',
+    'camera',
+    'camera.takePhoto',
+    '{}',
+    '--deny',
+    'share.send',
+  ]);
+  assert.equal(denyOnly.code, 1);
+  const defaultDeny = JSON.parse(denyOnly.stdout);
+  assert.equal(defaultDeny.ok, false);
+  assert.equal(defaultDeny.error.code, 'ERR_CAPABILITY_DENIED');
+  assert.equal(defaultDeny.error.reason, 'not-granted');
+});
+
+test('CLI reports a malformed permission manifest as a typed error', async () => {
+  const result = await runCli([
+    'invoke',
+    'camera',
+    'camera.takePhoto',
+    '{}',
+    '--grant',
+    'camera.nope',
+  ]);
+  assert.equal(result.code, 1);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, 'ERR_PERMISSION_MANIFEST');
+  assert.match(body.error.message, /invalid permission manifest/);
+  assert.ok(body.error.errors.some((err) => err.includes('camera.nope')));
 });
 
 test('a crashing plugin process is isolated and the next call recovers', async () => {
