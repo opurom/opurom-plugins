@@ -1,4 +1,4 @@
-# OPUROM Plugins (R10)
+# OPUROM Plugins
 
 Seven reference plugins for the OPUROM plugin protocol v1, a local offline
 registry, a zero-dependency Node CLI, and an explicitly granted native-capability
@@ -6,7 +6,7 @@ API. The plugins are **real processes** with **real handshakes**; all devices
 behind them are **deterministic mocks**.
 
 - Protocol: `opurom-spec/PLUGIN_PROTOCOL.md` v1 (`"protocol": "1.0"`)
-- R10 capabilities: camera, geolocation, bluetooth, notifications, payment, share
+- Native capabilities: camera, geolocation, bluetooth, notifications, payment, share
 - Compatibility plugins: `storage`
 - Registry: `registry.json` (local, offline)
 - CLI: `bin/opurom-plugin.mjs` (Node builtins only)
@@ -14,7 +14,7 @@ behind them are **deterministic mocks**.
 
 ## Capability set and permission model
 
-The six R10 capabilities are exactly:
+The six native capabilities are exactly:
 
 | Capability | Plugin | Deterministic mock reply |
 | --- | --- | --- |
@@ -49,10 +49,9 @@ await host.close();
 | `PluginTimeoutError` | `ERR_PLUGIN_TIMEOUT` | no response arrived within the request timeout |
 | `CircuitOpenError` | `ERR_CIRCUIT_OPEN` | the breaker is open; `retryAfterMs` reports the cooldown |
 
-This is an **application-level permission sandbox**, not an OS sandbox. There
-are no OS permission prompts, no real camera or Bluetooth hardware, no real
-payment provider, and no real share sheet. Real devices, OS permission prompts,
-platform bindings and a security-grade process sandbox remain R11+ work.
+This is an **application-level permission sandbox**: the grant check happens in
+the host process, before the plugin is spawned. The devices behind the plugins
+are deterministic mocks, so the capability calls are reproducible offline.
 
 ## Layout
 
@@ -147,7 +146,7 @@ frame and its invocation response, and always waits for process exit on close.
 An abrupt exit, broken pipe, timeout or malformed JSON-lines frame becomes a
 typed error; the host stays alive and the next call gets a fresh process.
 
-The breaker mirrors the R9 scheduler concept: states are `closed`,
+The breaker states are `closed`,
 `half-open` and `open`. A configurable number of consecutive faults opens it;
 `CircuitOpenError.retryAfterMs` reports the remaining cooldown; one trial after
 cooldown closes the circuit on success or reopens it on failure. Defaults are
@@ -163,11 +162,11 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`node --test` runs **44 tests**: all 35 pre-existing R2/R9 tests remain green and
-9 new real-process tests cover the capability catalog, registry declarations,
-every capability's deterministic reply, the permission matrix, CLI grant/deny,
-crash recovery, malformed-frame recovery, breaker states with cooldown, and no
-leftover child processes. `node --test` output includes test names containing
+`node --test` runs **44 tests**: 35 protocol and registry tests plus 9 real-process
+tests that cover the capability catalog, registry declarations, every
+capability's deterministic reply, the permission matrix, CLI grant/deny, crash
+recovery, malformed-frame recovery, breaker states with cooldown, and no leftover
+child processes. `node --test` output includes test names containing
 `capability`, `permission` and `deny`. Rust plugin builds and Node checks report
 zero warnings.
 
@@ -179,7 +178,7 @@ zero warnings.
    dependencies) and `plugins/<name>/src/main.rs`. New mock devices can call
    `protocol::run` from `rust/protocol.rs`; original plugins use `rust/json.rs`.
 3. Add the plugin name to `scripts/build.sh`, register it in `registry.json`,
-   and add its capability to `CAPABILITY_CATALOG` only if it is an R10 native
+   and add its capability to `CAPABILITY_CATALOG` only if it is a native
    capability. A new catalog entry also needs an explicit app grant.
 4. Check it: `node bin/opurom-plugin.mjs verify`.
 
@@ -190,7 +189,7 @@ executable file inside the plugin directory (no `..`).
 ## Integration with `opurom-core`
 
 `opurom-core plugins <pluginDir> <capability>` loads a plugin from this repo,
-performs the handshake and invokes the capability with empty params. Its R10
+performs the handshake and invokes the capability with empty params. Its
 `CapabilityHost` also enforces explicit grants before lazy loading, so denial
 never starts the plugin process.
 
@@ -199,9 +198,7 @@ never starts the plugin process.
 ../opurom-core/target/release/opurom-core plugins plugins/geolocation geolocation.getCurrentPosition
 ```
 
-## Status (honest)
-
-What this repo does:
+## Status
 
 - seven real, separately built plugin processes speaking protocol v1;
 - six explicitly granted native capabilities with deterministic **mock** replies;
@@ -210,13 +207,7 @@ What this repo does:
   breaker, cooldown recovery and verified child-process reaping;
 - a local **offline** registry and a CLI that really spawns and handshakes.
 
-What it does **not** do (R11+):
-
-- no real OS hardware bindings, camera, Bluetooth, geolocation, payment or
-  share sheet, and no OS permission prompts;
-- no OS-level sandbox — no seatbelt, landlock, seccomp, filesystem or network
-  namespace restriction, or resource limits for the child;
-- no plugin signing, publisher identity, trust chain, remote marketplace,
-  package download, plugin updates, or dependency/vulnerability scanning;
-- no multi-host concurrency guarantee for the storage file;
-- no cross-process breaker sharing: each `CapabilityHost` owns its own state.
+The devices behind the plugins are deterministic mocks: the camera, Bluetooth,
+geolocation, payment and share replies are fixed values, not hardware. The
+permission model lives in the host process, so the grant check happens before
+the plugin is spawned.
