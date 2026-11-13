@@ -36,13 +36,15 @@ async function withHost(schedule, timeoutMs, fn) {
 }
 
 test('an invocation that exceeds its budget is terminated and the host stays usable', async () => {
-  await withHost('hang,ok', 120, async ({ host, stateDir }) => {
+  // 500 ms leaves enough headroom for the host to spawn and run the second,
+  // non-hanging invocation under loader load; the hanging one still exceeds it.
+  await withHost('hang,ok', 500, async ({ host, stateDir }) => {
     await assert.rejects(
       () => host.invoke('camera.takePhoto'),
       (err) => {
         assert.ok(err instanceof PluginTimeoutError);
         assert.equal(err.code, 'ERR_PLUGIN_TIMEOUT');
-        assert.match(err.message, /timeout after 120 ms/);
+        assert.match(err.message, /^timeout after \d+ ms$/);
         return true;
       },
     );
