@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   loadRegistry,
   parseBinaryOverrides,
@@ -11,6 +13,23 @@ import {
   verifyEntry,
   ROOT,
 } from '../lib/host.mjs';
+
+const VALID_ENTRY = {
+  name: 'camera',
+  version: '0.1.0',
+  path: 'plugins/camera',
+  capabilities: ['camera.takePhoto'],
+};
+
+function withRegistry(plugins, fn) {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-registry-'));
+  try {
+    writeFileSync(path.join(root, 'registry.json'), JSON.stringify({ version: 1, plugins }));
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 test('registry.json has the documented shape', () => {
   const { registry, errors } = loadRegistry(ROOT);
@@ -36,6 +55,64 @@ test('registry.json has the documented shape', () => {
     assert.ok(entry.capabilities.length > 0);
     assert.deepEqual(validateRegistryEntry(entry, ROOT), []);
   }
+});
+
+test('a well-formed registry is returned without errors', () => {
+  withRegistry([VALID_ENTRY], (root) => {
+    const { registry, errors } = loadRegistry(root);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(registry.plugins, [VALID_ENTRY]);
+  });
+});
+
+test('duplicate plugin names invalidate the whole registry', () => {
+  withRegistry([VALID_ENTRY, { ...VALID_ENTRY }], (root) => {
+    const { registry, errors } = loadRegistry(root);
+    assert.equal(registry, null);
+    assert.ok(
+      errors.some((err) => err.includes('duplicate plugin name: camera')),
+      errors.join('; '),
+    );
+  });
+});
+
+test('a capability may be declared by only one plugin', () => {
+  const other = {
+    name: 'second',
+    version: '0.1.0',
+    path: 'plugins/second',
+    capabilities: ['camera.takePhoto'],
+  };
+  withRegistry([VALID_ENTRY, other], (root) => {
+    const { registry, errors } = loadRegistry(root);
+    assert.equal(registry, null);
+    assert.ok(
+      errors.some((err) => err.includes('duplicate capability declaration: camera.takePhoto')),
+      errors.join('; '),
+    );
+  });
+});
+
+test('malformed entries and repeated claims are reported before the registry is used', () => {
+  const broken = {
+    name: 'Bad Name',
+    version: '0.1.0',
+    path: 'plugins/bad',
+    capabilities: ['camera.takePhoto'],
+  };
+  const repeated = { ...VALID_ENTRY, capabilities: ['camera.takePhoto', 'camera.takePhoto'] };
+  withRegistry([broken, repeated], (root) => {
+    const { registry, errors } = loadRegistry(root);
+    assert.equal(registry, null);
+    assert.ok(
+      errors.some((err) => err.includes('plugin 0: invalid plugin name')),
+      errors.join('; '),
+    );
+    assert.ok(
+      errors.some((err) => err.includes('duplicate capability declaration')),
+      errors.join('; '),
+    );
+  });
 });
 
 test('registry entries declare the expected capabilities', () => {
