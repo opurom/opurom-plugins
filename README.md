@@ -87,6 +87,7 @@ lib/host.mjs                  host helpers (spawn, handshake, manifest and regis
 lib/capabilities.mjs          allow/deny manifests, declarations, breaker, isolated dispatch
 test/capabilities.test.mjs    permission and real process tests for grants, denials, faults and reaping
 test/audit.test.mjs           bounded invocation audit-trail tests
+test/health.test.mjs          per-plugin health snapshot tests
 test/                         node:test conformance suite
 test-fixtures/                test-only plugin stubs
 scripts/build.sh              builds all seven plugins with cargo
@@ -203,6 +204,28 @@ host.audit();
 await host.close();
 ```
 
+## Per-plugin health
+
+`CapabilityHost.health(plugin)` returns one frozen snapshot of the counters that
+belong to a single plugin: `invocations`, `denials`, `crashes` and
+`lastErrorCode`. Every `invoke` attempt for one of that plugin's catalog
+capabilities is counted once, a permission or declaration denial adds to
+`denials`, a dead plugin process adds to `crashes`, and `lastErrorCode` keeps
+the code of the most recent fault (`null` before the first one).
+
+The counters are keyed by the six-capability catalog, so the host tracks at most
+six plugins no matter how many attempts run, and they cover the whole lifetime
+while the audit trail stays bounded at `AUDIT_LIMIT`. `check()` stays pure and
+records nothing.
+
+```js
+const host = new CapabilityHost({ permissions: { allow: [], deny: [] } });
+await host.invoke('camera.takePhoto').catch(() => {});
+host.health('camera');
+// { plugin: 'camera', invocations: 1, denials: 1, crashes: 0, lastErrorCode: 'ERR_CAPABILITY_DENIED' }
+await host.close();
+```
+
 ## Tests
 
 ```bash
@@ -211,16 +234,18 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **63 tests**: 39 protocol, CLI, registry and recovery tests, 17
-capability-host tests, 4 timeout-configuration tests and 3 audit-trail tests.
+`npm test` runs **66 tests**: 39 protocol, CLI, registry and recovery tests, 17
+capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests and 3
+health-snapshot tests.
 They cover the capability catalog, registry declarations, whole-registry
 validation of entries, names and capability claims, every capability's
 deterministic reply, the permission matrix, deny precedence and default deny,
 manifest validation, deterministic permission checks, CLI grant/deny, crash
 recovery, malformed-frame recovery, breaker states with cooldown, timeout
-bounds, no leftover child processes, and a bounded append-only audit trail
-over allowed, denied and failed invocations. `npm test` output includes test
-names containing `capability`, `permission` and `deny`.
+bounds, no leftover child processes, a bounded append-only audit trail
+over allowed, denied and failed invocations, and exact per-plugin health
+counters for invocations, denials, crashes and the last error code. `npm test`
+output includes test names containing `capability`, `permission` and `deny`.
 
 ## Add a plugin
 
@@ -264,6 +289,8 @@ never starts the plugin process.
   breaker, cooldown recovery and child-process reaping;
 - a bounded, append-only invocation audit trail of allowed, denied and failed
   decisions, exposed through `host.audit()`;
+- per-plugin health counters for invocations, denials, crashes and the last
+  error code, exposed through `host.health(plugin)`;
 - a local **offline** registry and a CLI that really spawns and handshakes.
 
 The devices behind the plugins are deterministic mocks: the camera, Bluetooth,
