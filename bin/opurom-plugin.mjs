@@ -18,6 +18,7 @@ import {
   verifyEntry,
 } from '../lib/host.mjs';
 import { CapabilityHost } from '../lib/capabilities.mjs';
+import { MARKET_ROOT, listMarket, planInstall, resolveMarketPackage, searchMarket } from '../lib/market.mjs';
 
 const USAGE = `usage: opurom-plugin <command>
 
@@ -25,10 +26,15 @@ const USAGE = `usage: opurom-plugin <command>
   verify                            check every registry entry (manifest, executable, handshake, invoke)
   invoke <plugin> <capability> [json-params] [--grant csv] [--deny csv]
                                     invoke; --grant/--deny use the permission host
+  market list [query]               list (or search) packages in the opurom-pkg registry
+  market resolve <name> <version>   resolve a package to its files and sha256 digests
+  market plan <name> <version> [--grant csv] [--deny csv]
+                                    resolve an install plan, gated by the permission host
 
 environment:
   OPR_PLUGIN_BIN      "camera=/abs/path,storage=/abs/path" overrides plugin executables
-  OPR_PLUGIN_TIMEOUT_MS  request timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, bounded 50..5000)`;
+  OPR_PLUGIN_TIMEOUT_MS  request timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, bounded 50..5000)
+  OPR_MARKET_ROOT     directory of the opurom-pkg registry layout (default ${MARKET_ROOT})`;
 
 function fail(message, code = 1) {
   process.stderr.write(`error: ${message}\n`);
@@ -191,6 +197,45 @@ async function commandInvoke(root, pluginName, capability, paramParts, options) 
   process.exit(0);
 }
 
+async function commandMarket(root, rest, options) {
+  const registryRoot = process.env.OPR_MARKET_ROOT
+    ? path.resolve(process.env.OPR_MARKET_ROOT)
+    : MARKET_ROOT;
+  const [subcommand, ...args] = rest;
+  const marketOptions = { registryRoot, timeoutMs: options.timeoutMs, deny: options.denies };
+  if (subcommand === 'list') {
+    const rows = args.length > 0 ? searchMarket(args[0], marketOptions) : listMarket(marketOptions);
+    process.stdout.write(`${JSON.stringify(rows)}\n`);
+    process.exit(0);
+  }
+  if (subcommand === 'resolve' || subcommand === 'plan') {
+    const [name, version] = args;
+    if (!name || !version) fail(`market ${subcommand} needs <name> <version>`);
+    let host = null;
+    try {
+      let plan;
+      if (subcommand === 'plan') {
+        host = new CapabilityHost({
+          permissions: { allow: options.grants ?? [], deny: options.denies },
+          root,
+          overrides: options.overrides,
+          timeoutMs: options.timeoutMs,
+        });
+        plan = planInstall(name, version, host, marketOptions);
+      } else {
+        plan = resolveMarketPackage(name, version, marketOptions);
+      }
+      process.stdout.write(`${JSON.stringify(plan)}\n`);
+    } catch (err) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: capabilityError(err) })}\n`);
+      process.exitCode = 1;
+    }
+    if (host) await host.close();
+    process.exit(process.exitCode ?? 0);
+  }
+  fail(`unknown market subcommand: ${subcommand ?? '<none>'}`);
+}
+
 async function main(argv) {
   const root = ROOT;
   const overrides = parseBinaryOverrides(process.env.OPR_PLUGIN_BIN);
@@ -215,6 +260,10 @@ async function main(argv) {
     }
     const { params, grants, denies } = parseInvokeArgs(rawParams);
     await commandInvoke(root, pluginName, capability, params, { ...options, grants, denies });
+  }
+  if (command === 'market') {
+    const { params, grants, denies } = parseInvokeArgs(rest.slice(1));
+    await commandMarket(root, [rest[0], ...params], { ...options, grants, denies });
   }
   fail(`unknown command: ${command}\n${USAGE}`, 2);
 }
