@@ -67,6 +67,9 @@ rl.on('line', (line) => {
     case 'garbage':
       process.stdout.write(`{"id":${request.id},"ok":\n`);
       return;
+    case 'hang':
+      // Deliberately never replies so the host exercises its invocation timeout.
+      return;
     default:
       break;
   }
