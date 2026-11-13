@@ -38,6 +38,13 @@ any process is spawned the host also checks the catalog, the registry entry,
 the plugin manifest and the executable. A denied or undeclared capability
 returns a typed error and never executes the plugin.
 
+`loadRegistry` validates the whole index: every entry satisfies the
+registry-entry rules, plugin names are unique and each capability is claimed by
+one plugin only. Duplicate names or claims would make a grant resolve
+ambiguously. An invalid registry is rejected before use: `list`, `verify` and
+legacy `invoke` report the errors and exit nonzero, while the permission host
+raises `ERR_CAPABILITY_UNDECLARED` without spawning a process.
+
 ```js
 import { CapabilityHost } from './lib/capabilities.mjs';
 
@@ -75,7 +82,7 @@ rust/json.rs                  shared minimal JSON reader/writer
 rust/protocol.rs              shared request loop for the four new mock-device plugins
 registry.json                 local offline index of the seven plugins
 bin/opurom-plugin.mjs         CLI: list | verify | invoke
-lib/host.mjs                  host helpers (spawn, handshake, manifest validation)
+lib/host.mjs                  host helpers (spawn, handshake, manifest and registry validation)
 lib/capabilities.mjs          allow/deny manifests, declarations, breaker, isolated dispatch
 test/capabilities.test.mjs    permission and real process tests for grants, denials, faults and reaping
 test/                         node:test conformance suite
@@ -176,17 +183,18 @@ checks that no child PIDs survive crashes, malformed frames and shutdown.
 ## Tests
 
 ```bash
-node --test
+npm test
 node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`node --test` runs **51 tests**: 35 protocol, CLI and registry tests plus 16
-capability-host tests that cover the capability catalog, registry declarations,
-every capability's deterministic reply, the permission matrix, deny precedence
+`npm test` runs **56 tests**: 39 protocol, CLI, registry and recovery tests plus
+17 capability-host tests that cover the capability catalog, registry declarations,
+whole-registry validation of entries, names and capability claims, every
+capability's deterministic reply, the permission matrix, deny precedence
 and default deny, manifest validation, deterministic permission checks, CLI
 grant/deny, crash recovery, malformed-frame recovery, breaker states with
-cooldown, and no leftover child processes. `node --test` output includes test
+cooldown, and no leftover child processes. `npm test` output includes test
 names containing `capability`, `permission` and `deny`. Rust plugin builds and
 Node checks report zero warnings.
 
@@ -226,6 +234,8 @@ never starts the plugin process.
   strict validation, checked deterministically before any spawn;
 - typed denial for ungranted, explicitly denied or undeclared capabilities
   before any spawn;
+- whole-registry validation of entries, unique plugin names and unique
+  capability claims, applied before any entry is used;
 - process isolation for crashes and malformed frames, with a configurable
   breaker, cooldown recovery and verified child-process reaping;
 - a local **offline** registry and a CLI that really spawns and handshakes.

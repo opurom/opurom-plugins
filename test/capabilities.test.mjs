@@ -96,6 +96,36 @@ test('every capability is declared by its registry entry and manifest', () => {
   }
 });
 
+test('an invalid registry is rejected before any plugin is spawned', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-registry-'));
+  try {
+    const entry = {
+      name: 'camera',
+      version: '0.1.0',
+      path: 'plugins/camera',
+      capabilities: ['camera.takePhoto'],
+    };
+    writeFileSync(
+      path.join(root, 'registry.json'),
+      JSON.stringify({ version: 1, plugins: [entry, { ...entry }] }),
+    );
+    const host = new CapabilityHost({ grants: ['camera.takePhoto'], root });
+    try {
+      await assert.rejects(
+        () => host.invoke('camera.takePhoto'),
+        (err) =>
+          err instanceof CapabilityUndeclaredError &&
+          err.code === 'ERR_CAPABILITY_UNDECLARED',
+      );
+      assert.equal(host.spawnCount, 0);
+    } finally {
+      await host.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('each capability grants a deterministic reply from a real mock-device process', async () => {
   const host = new CapabilityHost({ grants: CAPABILITIES, root: ROOT, timeoutMs: 1000 });
   try {

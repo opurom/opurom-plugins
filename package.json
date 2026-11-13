@@ -1,0 +1,7 @@
+{
+  "name": "opurom-plugins",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
