@@ -1,0 +1,8 @@
+{
+  "name": "geolocation",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "capabilities": ["geolocation.getCurrentPosition"],
+  "entry": "./bin/geolocation",
+  "description": "Deterministic mock geolocation device"
+}

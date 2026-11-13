@@ -15,7 +15,11 @@ export async function runCli(args, options = {}) {
     const { stdout, stderr } = await execFileAsync(process.execPath, [CLI, ...args], {
       cwd: ROOT,
       timeout: 30000,
-      env: { ...process.env, ...(options.env ?? {}) },
+      env: {
+        OPR_PLUGIN_TIMEOUT_MS: '2000',
+        ...process.env,
+        ...(options.env ?? {}),
+      },
     });
     return { code: 0, stdout, stderr };
   } catch (err) {

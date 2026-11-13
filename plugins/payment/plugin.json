@@ -1,0 +1,8 @@
+{
+  "name": "payment",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "capabilities": ["payment.request"],
+  "entry": "./bin/payment",
+  "description": "Deterministic mock payment device"
+}

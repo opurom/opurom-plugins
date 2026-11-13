@@ -1,0 +1,11 @@
+[package]
+name = "opurom-plugin-payment"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "payment"
+path = "src/main.rs"
+
+[dependencies]

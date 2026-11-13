@@ -8,20 +8,24 @@ const OVERRIDE_STUB = path.join(ROOT, 'test-fixtures', 'override-plugin.mjs');
 test('list prints one row per registry plugin', async () => {
   const { code, stdout } = await runCli(['list']);
   assert.equal(code, 0);
-  for (const name of ['camera', 'notification', 'storage']) {
+  for (const name of ['camera', 'geolocation', 'bluetooth', 'notification', 'payment', 'share', 'storage']) {
     assert.match(stdout, new RegExp(`^${name}\\s`, 'm'));
   }
   assert.match(stdout, /camera\.takePhoto/);
   assert.match(stdout, /storage\.put,storage\.get/);
 });
 
-test('verify passes for all three built plugins and exits 0', async () => {
+test('verify passes for all seven built plugins and exits 0', async () => {
   const { code, stdout } = await runCli(['verify']);
   assert.equal(code, 0, stdout);
   assert.match(stdout, /PASS {2}camera {2}camera\.takePhoto/);
+  assert.match(stdout, /PASS {2}geolocation {2}geolocation\.getCurrentPosition/);
+  assert.match(stdout, /PASS {2}bluetooth {2}bluetooth\.scan/);
   assert.match(stdout, /PASS {2}notification {2}notification\.show/);
+  assert.match(stdout, /PASS {2}payment {2}payment\.request/);
+  assert.match(stdout, /PASS {2}share {2}share\.send/);
   assert.match(stdout, /PASS {2}storage {2}storage\.put, storage\.get/);
-  assert.match(stdout, /3\/3 plugins verified/);
+  assert.match(stdout, /7\/7 plugins verified/);
 });
 
 test('verify fails and exits nonzero when a plugin executable is broken', async () => {
@@ -31,7 +35,7 @@ test('verify fails and exits nonzero when a plugin executable is broken', async 
   assert.equal(code, 1);
   assert.match(stdout, /FAIL {2}camera/);
   assert.match(stdout, /PASS {2}notification/);
-  assert.match(stdout, /2\/3 plugins verified/);
+  assert.match(stdout, /6\/7 plugins verified/);
 });
 
 test('invoke runs a capability and prints the JSON result', async () => {
