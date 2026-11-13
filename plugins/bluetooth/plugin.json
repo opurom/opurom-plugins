@@ -1,0 +1,8 @@
+{
+  "name": "bluetooth",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "capabilities": ["bluetooth.scan"],
+  "entry": "./bin/bluetooth",
+  "description": "Deterministic mock Bluetooth scanner"
+}

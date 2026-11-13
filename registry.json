@@ -8,10 +8,34 @@
       "capabilities": ["camera.takePhoto"]
     },
     {
+      "name": "geolocation",
+      "version": "0.1.0",
+      "path": "plugins/geolocation",
+      "capabilities": ["geolocation.getCurrentPosition"]
+    },
+    {
+      "name": "bluetooth",
+      "version": "0.1.0",
+      "path": "plugins/bluetooth",
+      "capabilities": ["bluetooth.scan"]
+    },
+    {
       "name": "notification",
       "version": "0.1.0",
       "path": "plugins/notification",
       "capabilities": ["notification.show"]
+    },
+    {
+      "name": "payment",
+      "version": "0.1.0",
+      "path": "plugins/payment",
+      "capabilities": ["payment.request"]
+    },
+    {
+      "name": "share",
+      "version": "0.1.0",
+      "path": "plugins/share",
+      "capabilities": ["share.send"]
     },
     {
       "name": "storage",

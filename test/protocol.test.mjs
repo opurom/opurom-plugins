@@ -4,6 +4,10 @@ import path from 'node:path';
 import { statSync } from 'node:fs';
 import { ROOT, handshake, invokeCapability, resolveEntry, readManifest } from '../lib/host.mjs';
 
+// The full suite runs several test files concurrently; keep process handshakes
+// comfortably above the production 500 ms default under that load.
+process.env.OPR_PLUGIN_TIMEOUT_MS ??= '2000';
+
 const PLUGINS = [
   {
     name: 'camera',
@@ -13,11 +17,39 @@ const PLUGINS = [
     params: { quality: 'high' },
   },
   {
+    name: 'geolocation',
+    dir: 'plugins/geolocation',
+    binary: 'plugins/geolocation/bin/geolocation',
+    capability: 'geolocation.getCurrentPosition',
+    params: {},
+  },
+  {
+    name: 'bluetooth',
+    dir: 'plugins/bluetooth',
+    binary: 'plugins/bluetooth/bin/bluetooth',
+    capability: 'bluetooth.scan',
+    params: {},
+  },
+  {
     name: 'notification',
     dir: 'plugins/notification',
     binary: 'plugins/notification/bin/notification',
     capability: 'notification.show',
     params: { title: 'hi', message: 'yo' },
+  },
+  {
+    name: 'payment',
+    dir: 'plugins/payment',
+    binary: 'plugins/payment/bin/payment',
+    capability: 'payment.request',
+    params: { amount: 100 },
+  },
+  {
+    name: 'share',
+    dir: 'plugins/share',
+    binary: 'plugins/share/bin/share',
+    capability: 'share.send',
+    params: { title: 'hi', text: 'yo' },
   },
   {
     name: 'storage',
@@ -73,7 +105,7 @@ test('camera.takePhoto returns a deterministic simulated path', async () => {
 });
 
 test('storage round-trips a value through its persisted map', async () => {
-  const binary = binaryOf(PLUGINS[2].binary);
+  const binary = binaryOf(PLUGINS[6].binary);
   const put = await invokeCapability(binary, 'storage.put', { key: 'roundtrip', value: { n: 1 } });
   assert.equal(put.ok, true);
   assert.equal(put.result.stored, true);
@@ -85,12 +117,8 @@ test('storage round-trips a value through its persisted map', async () => {
 
 test('a plugin works with empty params, as opurom-core invokes it', async () => {
   // opurom-core calls `invoke` with `{}`; every capability must answer without params.
-  const cases = [
-    { binary: 'plugins/camera/bin/camera', capability: 'camera.takePhoto' },
-    { binary: 'plugins/notification/bin/notification', capability: 'notification.show' },
-    { binary: 'plugins/storage/bin/storage', capability: 'storage.put' },
-    { binary: 'plugins/storage/bin/storage', capability: 'storage.get' },
-  ];
+  const cases = PLUGINS.map(({ binary, capability }) => ({ binary, capability }));
+  cases.push({ binary: 'plugins/storage/bin/storage', capability: 'storage.get' });
   for (const plugin of cases) {
     const result = await invokeCapability(binaryOf(plugin.binary), plugin.capability, {});
     assert.equal(result.ok, true, `${plugin.capability}: ${result.error}`);

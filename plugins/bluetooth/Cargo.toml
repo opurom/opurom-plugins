@@ -1,0 +1,11 @@
+[package]
+name = "opurom-plugin-bluetooth"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "bluetooth"
+path = "src/main.rs"
+
+[dependencies]

@@ -17,9 +17,17 @@ test('registry.json has the documented shape', () => {
   assert.deepEqual(errors, []);
   assert.equal(registry.version, 1);
   assert.ok(Array.isArray(registry.plugins));
-  assert.equal(registry.plugins.length, 3);
+  assert.equal(registry.plugins.length, 7);
   const names = registry.plugins.map((entry) => entry.name).sort();
-  assert.deepEqual(names, ['camera', 'notification', 'storage']);
+  assert.deepEqual(names, [
+    'bluetooth',
+    'camera',
+    'geolocation',
+    'notification',
+    'payment',
+    'share',
+    'storage',
+  ]);
   for (const entry of registry.plugins) {
     assert.equal(typeof entry.name, 'string');
     assert.equal(typeof entry.version, 'string');
@@ -34,7 +42,11 @@ test('registry entries declare the expected capabilities', () => {
   const { registry } = loadRegistry(ROOT);
   const byName = Object.fromEntries(registry.plugins.map((entry) => [entry.name, entry]));
   assert.deepEqual(byName.camera.capabilities, ['camera.takePhoto']);
+  assert.deepEqual(byName.geolocation.capabilities, ['geolocation.getCurrentPosition']);
+  assert.deepEqual(byName.bluetooth.capabilities, ['bluetooth.scan']);
   assert.deepEqual(byName.notification.capabilities, ['notification.show']);
+  assert.deepEqual(byName.payment.capabilities, ['payment.request']);
+  assert.deepEqual(byName.share.capabilities, ['share.send']);
   assert.deepEqual(byName.storage.capabilities, ['storage.put', 'storage.get']);
 });
 
