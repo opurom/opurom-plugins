@@ -11,6 +11,7 @@ handshakes**; all devices behind them are **deterministic mocks**.
 - Registry: `registry.json` (local, offline)
 - CLI: `bin/opurom-plugin.mjs` (Node builtins only)
 - Permission host: `lib/capabilities.mjs` (Node builtins only)
+- Market client: `lib/market.mjs` (Node builtins only)
 
 ## Capability set and permission model
 
@@ -85,9 +86,11 @@ registry.json                 local offline index of the seven plugins
 bin/opurom-plugin.mjs         CLI: list | verify | invoke
 lib/host.mjs                  host helpers (spawn, handshake, manifest and registry validation)
 lib/capabilities.mjs          allow/deny manifests, declarations, breaker, isolated dispatch
+lib/market.mjs                plugin market client over the opurom-pkg registry layout
 test/capabilities.test.mjs    permission and real process tests for grants, denials, faults and reaping
 test/audit.test.mjs           bounded invocation audit-trail tests
 test/health.test.mjs          per-plugin health snapshot tests
+test/market.test.mjs          market listing, resolution and permission-gated install tests
 test/                         node:test conformance suite
 test-fixtures/                test-only plugin stubs
 scripts/build.sh              builds all seven plugins with cargo
@@ -226,6 +229,29 @@ host.health('camera');
 await host.close();
 ```
 
+## Plugin market
+
+`lib/market.mjs` is a small market client over an `opurom-pkg` registry layout
+(`registry/<name>/<version>/` holding package files and an `opurom-pkg.json`
+manifest). It reads that layout directly and deterministically — every listing
+is byte-sorted by name then version and every resolved file carries its sha256
+digest — with no network and no third-party dependency.
+
+```bash
+node bin/opurom-plugin.mjs market list                 # every package, sorted
+node bin/opurom-plugin.mjs market list ui              # substring search
+node bin/opurom-plugin.mjs market resolve opurom-ui 0.1.0
+node bin/opurom-plugin.mjs market plan opurom-ui 0.1.0 --grant camera.takePhoto
+```
+
+Resolution honours a bounded timeout (`OPR_PLUGIN_TIMEOUT_MS`) and an explicit
+deny list, so a denied or unsafe package is refused before any file is read.
+An install plan for a package that declares a native capability goes through
+`CapabilityHost.check()`: an ungranted or explicitly denied capability is
+refused, so the market never installs around the host's allow/deny manifest.
+The market registry directory defaults to the sibling `opurom-pkg` checkout and
+can be pointed elsewhere with `OPR_MARKET_ROOT`.
+
 ## Tests
 
 ```bash
@@ -234,18 +260,20 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **66 tests**: 39 protocol, CLI, registry and recovery tests, 17
-capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests and 3
-health-snapshot tests.
+`npm test` runs **78 tests**: 39 protocol, CLI, registry and recovery tests, 17
+capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
+health-snapshot tests and 12 market-client tests.
 They cover the capability catalog, registry declarations, whole-registry
 validation of entries, names and capability claims, every capability's
 deterministic reply, the permission matrix, deny precedence and default deny,
 manifest validation, deterministic permission checks, CLI grant/deny, crash
 recovery, malformed-frame recovery, breaker states with cooldown, timeout
 bounds, no leftover child processes, a bounded append-only audit trail
-over allowed, denied and failed invocations, and exact per-plugin health
-counters for invocations, denials, crashes and the last error code. `npm test`
-output includes test names containing `capability`, `permission` and `deny`.
+over allowed, denied and failed invocations, exact per-plugin health
+counters for invocations, denials, crashes and the last error code, and
+deterministic market listing, search, digest resolution and permission-gated
+install plans. `npm test` output includes test names containing `capability`,
+`permission`, `deny` and `market`.
 
 ## Add a plugin
 
