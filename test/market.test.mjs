@@ -4,7 +4,6 @@ import path from 'node:path';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
-  MARKET_ROOT,
   MarketError,
   listMarket,
   planInstall,
@@ -53,27 +52,39 @@ function addPackage(root, name, version, files, extra = {}) {
   });
 }
 
-test('listing the real opurom-pkg registry is deterministic and sorted', () => {
-  const first = listMarket({ registryRoot: MARKET_ROOT });
-  const second = listMarket({ registryRoot: MARKET_ROOT });
+// A self-contained registry fixture keeps these checks independent of the
+// sibling opurom-pkg checkout, which CI does not clone.
+function withTwoPackages(fn) {
+  return withMarket(
+    (root) => {
+      addPackage(root, 'opurom-ui', '0.1.0', ['button.opu', 'card.opu', 'opurom-pkg.json']);
+      addPackage(root, 'opurom-data', '0.1.0', ['query.opu', 'record.opu', 'opurom-pkg.json']);
+    },
+    fn,
+  );
+}
+
+test('listing a registry is deterministic and sorted', () => withTwoPackages((root) => {
+  const first = listMarket({ registryRoot: root });
+  const second = listMarket({ registryRoot: root });
   assert.deepEqual(first, second);
-  assert.ok(first.length >= 2, 'the sibling registry carries packages');
+  assert.equal(first.length, 2);
   const names = first.map((entry) => `${entry.name}@${entry.version}`);
   assert.deepEqual(names, [...names].sort());
   for (const entry of first) {
     assert.deepEqual(entry.files, [...entry.files].sort());
   }
-});
+}));
 
-test('search filters the listing by name substring', () => {
-  const hits = searchMarket('ui', { registryRoot: MARKET_ROOT });
-  assert.ok(hits.length >= 1);
+test('search filters the listing by name substring', () => withTwoPackages((root) => {
+  const hits = searchMarket('ui', { registryRoot: root });
+  assert.equal(hits.length, 1);
   assert.ok(hits.every((entry) => entry.name.includes('ui')));
-  assert.deepEqual(searchMarket('zzz-no-such-package', { registryRoot: MARKET_ROOT }), []);
-});
+  assert.deepEqual(searchMarket('zzz-no-such-package', { registryRoot: root }), []);
+}));
 
-test('resolve returns the files with sha256 digests in sorted order', () => {
-  const resolved = resolveMarketPackage('opurom-ui', '0.1.0', { registryRoot: MARKET_ROOT });
+test('resolve returns the files with sha256 digests in sorted order', () => withTwoPackages((root) => {
+  const resolved = resolveMarketPackage('opurom-ui', '0.1.0', { registryRoot: root });
   assert.equal(resolved.name, 'opurom-ui');
   assert.equal(resolved.version, '0.1.0');
   const paths = resolved.files.map((file) => file.path);
@@ -81,7 +92,7 @@ test('resolve returns the files with sha256 digests in sorted order', () => {
   for (const file of resolved.files) {
     assert.match(file.sha256, /^[0-9a-f]{64}$/);
   }
-});
+}));
 
 test('a denied package is refused before any file is read', () => {
   withMarket(
@@ -101,18 +112,18 @@ test('a denied package is refused before any file is read', () => {
 
 test('invalid names and versions are rejected', () => {
   assert.throws(
-    () => resolveMarketPackage('Bad Name', '0.1.0', { registryRoot: MARKET_ROOT }),
+    () => resolveMarketPackage('Bad Name', '0.1.0', { registryRoot: '/' }),
     (err) => err instanceof MarketError && err.code === 'ERR_MARKET_NAME',
   );
   assert.throws(
-    () => resolveMarketPackage('opurom-ui', 'latest', { registryRoot: MARKET_ROOT }),
+    () => resolveMarketPackage('opurom-ui', 'latest', { registryRoot: '/' }),
     (err) => err instanceof MarketError && err.code === 'ERR_MARKET_VERSION',
   );
 });
 
 test('a missing package directory is a typed manifest error', () => {
   assert.throws(
-    () => resolveMarketPackage('ghost', '0.1.0', { registryRoot: MARKET_ROOT }),
+    () => resolveMarketPackage('ghost', '0.1.0', { registryRoot: '/' }),
     (err) => err instanceof MarketError && err.code === 'ERR_MARKET_MANIFEST',
   );
 });
@@ -211,23 +222,32 @@ test('a capability-bearing package without a host is refused', () => {
 });
 
 test('the CLI market subcommands list, resolve and gate a plan', async () => {
-  const listed = await runCli(['market', 'list']);
-  assert.equal(listed.code, 0, listed.stderr);
-  const packages = JSON.parse(listed.stdout);
-  assert.ok(packages.some((entry) => entry.name === 'opurom-ui'));
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-market-cli-'));
+  try {
+    addPackage(root, 'opurom-ui', '0.1.0', ['button.opu', 'card.opu', 'opurom-pkg.json']);
+    const env = { OPR_MARKET_ROOT: root };
+    const listed = await runCli(['market', 'list'], { env });
+    assert.equal(listed.code, 0, listed.stderr);
+    const packages = JSON.parse(listed.stdout);
+    assert.ok(packages.some((entry) => entry.name === 'opurom-ui'));
 
-  const resolved = await runCli(['market', 'resolve', 'opurom-ui', '0.1.0']);
-  assert.equal(resolved.code, 0, resolved.stderr);
-  const plan = JSON.parse(resolved.stdout);
-  assert.ok(plan.files.every((file) => /^[0-9a-f]{64}$/.test(file.sha256)));
+    const resolved = await runCli(['market', 'resolve', 'opurom-ui', '0.1.0'], { env });
+    assert.equal(resolved.code, 0, resolved.stderr);
+    const plan = JSON.parse(resolved.stdout);
+    assert.ok(plan.files.every((file) => /^[0-9a-f]{64}$/.test(file.sha256)));
 
-  const denied = await runCli(['market', 'resolve', 'opurom-ui', '0.1.0', '--deny', 'opurom-ui']);
-  assert.equal(denied.code, 1);
-  assert.equal(JSON.parse(denied.stdout).error.code, 'ERR_MARKET_DENIED');
+    const denied = await runCli(
+      ['market', 'resolve', 'opurom-ui', '0.1.0', '--deny', 'opurom-ui'], { env },
+    );
+    assert.equal(denied.code, 1);
+    assert.equal(JSON.parse(denied.stdout).error.code, 'ERR_MARKET_DENIED');
 
-  const planned = await runCli(['market', 'plan', 'opurom-ui', '0.1.0']);
-  assert.equal(planned.code, 0, planned.stderr);
-  assert.equal(JSON.parse(planned.stdout).name, 'opurom-ui');
+    const planned = await runCli(['market', 'plan', 'opurom-ui', '0.1.0'], { env });
+    assert.equal(planned.code, 0, planned.stderr);
+    assert.equal(JSON.parse(planned.stdout).name, 'opurom-ui');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the CLI market root honours OPR_MARKET_ROOT', async () => {
