@@ -1,5 +1,5 @@
 //! Shared request loop for the deterministic mock-device plugins.
-//! The wire format and error handling match the three original capability plugins.
+//! The wire format and error handling match the original plugins.
 #[path = "json.rs"]
 mod json;
 

@@ -1,12 +1,12 @@
-# Opurom Plugins (capability)
+# Opurom Plugins
 
 Seven reference plugins for the Opurom plugin protocol v1, a local offline
-registry, a zero-dependency Node CLI, and an explicitly granted native-capability
-API. The plugins are **real processes** with **real handshakes**; all devices
-behind them are **deterministic mocks**.
+registry, a zero-dependency Node CLI, and an allow/deny permission-gated
+native-capability API. The plugins are **real processes** with **real
+handshakes**; all devices behind them are **deterministic mocks**.
 
 - Protocol: `the internal plugin protocol` v1 (`"protocol": "1.0"`)
-- capability capabilities: camera, geolocation, bluetooth, notifications, payment, share
+- Native capabilities: camera, geolocation, bluetooth, notifications, payment, share
 - Compatibility plugins: `storage`
 - Registry: `registry.json` (local, offline)
 - CLI: `bin/opurom-plugin.mjs` (Node builtins only)
@@ -14,7 +14,7 @@ behind them are **deterministic mocks**.
 
 ## Capability set and permission model
 
-The six capability capabilities are exactly:
+The six native capabilities are exactly:
 
 | Capability | Plugin | Deterministic mock reply |
 | --- | --- | --- |
@@ -26,33 +26,44 @@ The six capability capabilities are exactly:
 | `share.send` | `share` | a fixed share-sheet target with the title and text |
 
 Every plugin declares its capability in both `registry.json` and its
-`plugins/<name>/plugin.json` manifest. `CapabilityHost` receives an explicit
-set of grants; there is no ambient or implicit permission. Before any process is
-spawned it checks the catalog, the grant, the registry entry, the manifest, and
-the executable. A denied or undeclared capability returns a typed error and
-never executes the plugin.
+`plugins/<name>/plugin.json` manifest. The app supplies a **permission
+manifest** to `CapabilityHost`: `permissions: { allow: [...], deny: [...] }`
+(the `grants` option is a shorthand for `allow`). A capability runs only when
+it is in `allow` and not in `deny`. **Deny wins.** Anything absent from the
+manifest is denied by default; there is no ambient or implicit permission.
+The manifest is validated at construction: wrong types, unknown capabilities
+and unknown fields raise `PermissionManifestError` with the offending field.
+`check(capability)` is a pure, deterministic decision over those lists. Before
+any process is spawned the host also checks the catalog, the registry entry,
+the plugin manifest and the executable. A denied or undeclared capability
+returns a typed error and never executes the plugin.
 
 ```js
 import { CapabilityHost } from './lib/capabilities.mjs';
 
-const host = new CapabilityHost({ grants: ['camera.takePhoto'] });
+const host = new CapabilityHost({
+  permissions: { allow: ['camera.takePhoto', 'share.send'], deny: ['share.send'] },
+});
 const photo = await host.invoke('camera.takePhoto', { quality: 'high' });
+// host.invoke('share.send') rejects: allow and deny both list it, and deny wins.
 await host.close();
 ```
 
 | Typed error | `code` | Meaning |
 | --- | --- | --- |
-| `CapabilityDeniedError` | `ERR_CAPABILITY_DENIED` | the app did not explicitly grant the capability |
+| `CapabilityDeniedError` | `ERR_CAPABILITY_DENIED` | the app did not grant the capability (`not-granted`) or explicitly denied it (`explicit-deny`) |
 | `CapabilityUndeclaredError` | `ERR_CAPABILITY_UNDECLARED` | no registry entry and manifest declare the capability |
+| `PermissionManifestError` | `ERR_PERMISSION_MANIFEST` | the permission manifest is malformed; `errors` names every offending field |
 | `PluginCrashError` | `ERR_PLUGIN_CRASH` | the plugin exited abruptly or its pipe broke |
 | `PluginProtocolError` | `ERR_PLUGIN_FRAME` | a response line is malformed or invalid |
 | `PluginTimeoutError` | `ERR_PLUGIN_TIMEOUT` | no response arrived within the request timeout |
 | `CircuitOpenError` | `ERR_CIRCUIT_OPEN` | the breaker is open; `retryAfterMs` reports the cooldown |
 
-This is an **application-level permission sandbox**, not an OS sandbox. There
-are no OS permission prompts, no real camera or Bluetooth hardware, no real
-payment provider, and no real share sheet. Real devices, OS permission prompts,
-platform bindings and a security-grade process sandbox remain capability+ work.
+This is an **application-level permission sandbox**: the allow/deny check
+happens in the host process, before the plugin is spawned. `check()` never
+mutates the host, so repeated calls return the same decision. The devices
+behind the plugins are deterministic mocks, so the capability calls are
+reproducible offline.
 
 ## Layout
 
@@ -65,8 +76,8 @@ rust/protocol.rs              shared request loop for the four new mock-device p
 registry.json                 local offline index of the seven plugins
 bin/opurom-plugin.mjs         CLI: list | verify | invoke
 lib/host.mjs                  host helpers (spawn, handshake, manifest validation)
-lib/capabilities.mjs          explicit grants, declarations, breaker, isolated dispatch
-test/capabilities.test.mjs    real process tests for grants, denials, faults and reaping
+lib/capabilities.mjs          allow/deny manifests, declarations, breaker, isolated dispatch
+test/capabilities.test.mjs    permission and real process tests for grants, denials, faults and reaping
 test/                         node:test conformance suite
 test-fixtures/                test-only plugin stubs
 scripts/build.sh              builds all seven plugins with cargo
@@ -120,7 +131,9 @@ an executable inside the plugin directory, spawns the plugin, performs a real
 `hello` handshake and one real `invoke`, and prints `PASS`/`FAIL` per plugin.
 
 The legacy `invoke` command is retained for protocol compatibility. Add
-`--grant <capability>[,<capability>...]` to use the explicit permission host:
+`--grant <capability>[,<capability>...]` and
+`--deny <capability>[,<capability>...]` to use the permission host; both feed
+the permission manifest:
 
 ```bash
 node bin/opurom-plugin.mjs invoke camera camera.takePhoto '{"quality":"high"}' --grant camera.takePhoto
@@ -128,10 +141,15 @@ node bin/opurom-plugin.mjs invoke camera camera.takePhoto '{"quality":"high"}' -
 
 node bin/opurom-plugin.mjs invoke camera camera.takePhoto '{}' --grant notification.show
 # {"ok":false,"error":{"code":"ERR_CAPABILITY_DENIED", ... }}
+
+node bin/opurom-plugin.mjs invoke camera camera.takePhoto '{}' --grant camera.takePhoto --deny camera.takePhoto
+# {"ok":false,"error":{"code":"ERR_CAPABILITY_DENIED","reason":"explicit-deny", ... }}
 ```
 
 Without a matching grant, the second command does not spawn the camera process.
-An undeclared capability returns `ERR_CAPABILITY_UNDECLARED` before any spawn.
+`--deny` wins over `--grant` for the same capability, and a malformed manifest
+returns `ERR_PERMISSION_MANIFEST`. An undeclared capability returns
+`ERR_CAPABILITY_UNDECLARED` before any spawn.
 
 ### Environment
 
@@ -147,7 +165,7 @@ frame and its invocation response, and always waits for process exit on close.
 An abrupt exit, broken pipe, timeout or malformed JSON-lines frame becomes a
 typed error; the host stays alive and the next call gets a fresh process.
 
-The breaker mirrors the capability scheduler concept: states are `closed`,
+The breaker states are `closed`,
 `half-open` and `open`. A configurable number of consecutive faults opens it;
 `CircuitOpenError.retryAfterMs` reports the remaining cooldown; one trial after
 cooldown closes the circuit on success or reopens it on failure. Defaults are
@@ -163,13 +181,14 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`node --test` runs **44 tests**: all 35 pre-existing capability/capability tests remain green and
-9 new real-process tests cover the capability catalog, registry declarations,
-every capability's deterministic reply, the permission matrix, CLI grant/deny,
-crash recovery, malformed-frame recovery, breaker states with cooldown, and no
-leftover child processes. `node --test` output includes test names containing
-`capability`, `permission` and `deny`. Rust plugin builds and Node checks report
-zero warnings.
+`node --test` runs **51 tests**: 35 protocol, CLI and registry tests plus 16
+capability-host tests that cover the capability catalog, registry declarations,
+every capability's deterministic reply, the permission matrix, deny precedence
+and default deny, manifest validation, deterministic permission checks, CLI
+grant/deny, crash recovery, malformed-frame recovery, breaker states with
+cooldown, and no leftover child processes. `node --test` output includes test
+names containing `capability`, `permission` and `deny`. Rust plugin builds and
+Node checks report zero warnings.
 
 ## Add a plugin
 
@@ -179,8 +198,8 @@ zero warnings.
    dependencies) and `plugins/<name>/src/main.rs`. New mock devices can call
    `protocol::run` from `rust/protocol.rs`; original plugins use `rust/json.rs`.
 3. Add the plugin name to `scripts/build.sh`, register it in `registry.json`,
-   and add its capability to `CAPABILITY_CATALOG` only if it is an capability native
-   capability. A new catalog entry also needs an explicit app grant.
+   and add its capability to `CAPABILITY_CATALOG` only if it is a native
+   capability. A new catalog entry also needs an entry in the app's `allow` list.
 4. Check it: `node bin/opurom-plugin.mjs verify`.
 
 `name` matches `[a-z][a-z0-9-]{1,31}`, `version` is `x.y.z`, `protocol` is
@@ -190,7 +209,7 @@ executable file inside the plugin directory (no `..`).
 ## Integration with `opurom-core`
 
 `opurom-core plugins <pluginDir> <capability>` loads a plugin from this repo,
-performs the handshake and invokes the capability with empty params. Its capability
+performs the handshake and invokes the capability with empty params. Its
 `CapabilityHost` also enforces explicit grants before lazy loading, so denial
 never starts the plugin process.
 
@@ -199,24 +218,19 @@ never starts the plugin process.
 ../opurom-core/target/release/opurom-core plugins plugins/geolocation geolocation.getCurrentPosition
 ```
 
-## Status (honest)
-
-What this repo does:
+## Status
 
 - seven real, separately built plugin processes speaking protocol v1;
-- six explicitly granted native capabilities with deterministic **mock** replies;
-- typed denial for ungranted or undeclared capabilities before any spawn;
+- six permission-gated native capabilities with deterministic **mock** replies;
+- an allow/deny permission manifest with deny precedence, default deny and
+  strict validation, checked deterministically before any spawn;
+- typed denial for ungranted, explicitly denied or undeclared capabilities
+  before any spawn;
 - process isolation for crashes and malformed frames, with a configurable
   breaker, cooldown recovery and verified child-process reaping;
 - a local **offline** registry and a CLI that really spawns and handshakes.
 
-What it does **not** do (capability+):
-
-- no real OS hardware bindings, camera, Bluetooth, geolocation, payment or
-  share sheet, and no OS permission prompts;
-- no OS-level sandbox — no seatbelt, landlock, seccomp, filesystem or network
-  namespace restriction, or resource limits for the child;
-- no plugin signing, publisher identity, trust chain, remote marketplace,
-  package download, plugin updates, or dependency/vulnerability scanning;
-- no multi-host concurrency guarantee for the storage file;
-- no cross-process breaker sharing: each `CapabilityHost` owns its own state.
+The devices behind the plugins are deterministic mocks: the camera, Bluetooth,
+geolocation, payment and share replies are fixed values, not hardware. The
+permission model lives in the host process, so the allow/deny check happens before
+the plugin is spawned.
