@@ -2,6 +2,7 @@
   "name": "opurom-plugins",
   "private": true,
   "scripts": {
+    "pretest": "bash scripts/build.sh",
     "test": "node --test"
   }
 }
