@@ -5,7 +5,8 @@ registry, a zero-dependency Node CLI, and an allow/deny permission-gated
 native-capability API. The plugins are **real processes** with **real
 handshakes**; all devices behind them are **deterministic mocks**.
 
-- Protocol: `opurom-spec/PLUGIN_PROTOCOL.md` v1 (`"protocol": "1.0"`)
+- Protocol: [PLUGIN_PROTOCOL.md](https://github.com/opurom/opurom-spec/blob/main/PLUGIN_PROTOCOL.md)
+  v1 (`"protocol": "1.0"`)
 - Native capabilities: camera, geolocation, bluetooth, notifications, payment, share
 - Compatibility plugins: `storage`
 - Registry: `registry.json` (local, offline)
