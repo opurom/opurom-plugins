@@ -86,6 +86,7 @@ bin/opurom-plugin.mjs         CLI: list | verify | invoke
 lib/host.mjs                  host helpers (spawn, handshake, manifest and registry validation)
 lib/capabilities.mjs          allow/deny manifests, declarations, breaker, isolated dispatch
 test/capabilities.test.mjs    permission and real process tests for grants, denials, faults and reaping
+test/audit.test.mjs           bounded invocation audit-trail tests
 test/                         node:test conformance suite
 test-fixtures/                test-only plugin stubs
 scripts/build.sh              builds all seven plugins with cargo
@@ -111,8 +112,6 @@ error for an unknown capability; recovers from a malformed request line; echoes
 the request `id`; and writes logs to stderr only.
 
 ## Build
-
-Requires Rust (1.99.1 used here) and Node (v26 used here).
 
 ```bash
 ./scripts/build.sh
@@ -181,6 +180,29 @@ three faults and 1000 ms, and an injected `clock` makes cooldown tests
 deterministic. `CapabilityHost.close()` reaps every active process; the suite
 checks that no child PIDs survive crashes, malformed frames and shutdown.
 
+## Invocation audit trail
+
+`CapabilityHost` appends one immutable entry to an in-memory trail for every
+`invoke` attempt. Each entry holds a monotonically increasing sequence number,
+the capability, the decision (`allowed`, `denied` or `error`) and its reason:
+`granted`, a deny reason (`explicit-deny`, `not-granted` or `undeclared`), or
+the typed error code of a fault. Entries carry no timestamps or process data,
+so the same call sequence produces the same trail.
+
+`host.audit()` returns a snapshot. Entries are frozen, the returned array is a
+copy, and the host retains the most recent `AUDIT_LIMIT` (100) entries when
+that limit is reached. `check()` stays pure and appends nothing. Denials,
+circuit rejections, crashes and timeouts all appear in the trail, so the
+decisions behind an isolated plugin remain inspectable.
+
+```js
+const host = new CapabilityHost({ permissions: { allow: [], deny: [] } });
+await host.invoke('camera.takePhoto').catch(() => {});
+host.audit();
+// [{ seq: 1, capability: 'camera.takePhoto', decision: 'denied', reason: 'not-granted' }]
+await host.close();
+```
+
 ## Tests
 
 ```bash
@@ -189,15 +211,16 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **56 tests**: 39 protocol, CLI, registry and recovery tests plus
-17 capability-host tests that cover the capability catalog, registry declarations,
-whole-registry validation of entries, names and capability claims, every
-capability's deterministic reply, the permission matrix, deny precedence
-and default deny, manifest validation, deterministic permission checks, CLI
-grant/deny, crash recovery, malformed-frame recovery, breaker states with
-cooldown, and no leftover child processes. `npm test` output includes test
-names containing `capability`, `permission` and `deny`. Rust plugin builds and
-Node checks report zero warnings.
+`npm test` runs **63 tests**: 39 protocol, CLI, registry and recovery tests, 17
+capability-host tests, 4 timeout-configuration tests and 3 audit-trail tests.
+They cover the capability catalog, registry declarations, whole-registry
+validation of entries, names and capability claims, every capability's
+deterministic reply, the permission matrix, deny precedence and default deny,
+manifest validation, deterministic permission checks, CLI grant/deny, crash
+recovery, malformed-frame recovery, breaker states with cooldown, timeout
+bounds, no leftover child processes, and a bounded append-only audit trail
+over allowed, denied and failed invocations. `npm test` output includes test
+names containing `capability`, `permission` and `deny`.
 
 ## Add a plugin
 
@@ -238,7 +261,9 @@ never starts the plugin process.
 - whole-registry validation of entries, unique plugin names and unique
   capability claims, applied before any entry is used;
 - process isolation for crashes and malformed frames, with a configurable
-  breaker, cooldown recovery and verified child-process reaping;
+  breaker, cooldown recovery and child-process reaping;
+- a bounded, append-only invocation audit trail of allowed, denied and failed
+  decisions, exposed through `host.audit()`;
 - a local **offline** registry and a CLI that really spawns and handshakes.
 
 The devices behind the plugins are deterministic mocks: the camera, Bluetooth,
