@@ -64,6 +64,7 @@ await host.close();
 | `PluginCrashError` | `ERR_PLUGIN_CRASH` | the plugin exited abruptly or its pipe broke |
 | `PluginProtocolError` | `ERR_PLUGIN_FRAME` | a response line is malformed or invalid |
 | `PluginTimeoutError` | `ERR_PLUGIN_TIMEOUT` | no response arrived within the request timeout |
+| `PluginConfigError` | `ERR_PLUGIN_CONFIG` | a zero, negative or non-finite timeout was passed at configuration time |
 | `CircuitOpenError` | `ERR_CIRCUIT_OPEN` | the breaker is open; `retryAfterMs` reports the cooldown |
 
 This is an **application-level permission sandbox**: the allow/deny check
