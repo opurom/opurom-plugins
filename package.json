@@ -4,5 +4,6 @@
   "scripts": {
     "pretest": "bash scripts/build.sh",
     "test": "node --test"
-  }
+  },
+  "version": "0.1.0"
 }
