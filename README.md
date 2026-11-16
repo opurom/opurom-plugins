@@ -268,9 +268,9 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **81 tests**: 39 protocol, CLI, registry and recovery tests, 17
+`npm test` runs **83 tests**: 39 protocol, CLI, registry and recovery tests, 17
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
-health-snapshot tests, 12 market-client tests and 3 shutdown-lifecycle tests.
+health-snapshot tests, 12 market-client tests and 5 lifecycle tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the
 storage plugin's persisted state and parallel load breaks tight timeout
 budgets.
@@ -280,7 +280,9 @@ deterministic reply, the permission matrix, deny precedence and default deny,
 manifest validation, deterministic permission checks, CLI grant/deny, crash
 recovery, malformed-frame recovery, breaker states with cooldown, timeout
 bounds, no leftover child processes, shutdown delivery on close with a
-force-kill fallback for plugins that never leave, a bounded append-only audit
+force-kill fallback for plugins that never leave, a `list()` snapshot per the
+host contract (declared capabilities, `Active|Disabled` status and invocation
+count), a bounded append-only audit
 trail over allowed, denied and failed invocations, exact per-plugin health
 counters for invocations, denials, crashes and the last error code, and
 deterministic market listing, search, digest resolution and permission-gated
@@ -331,6 +333,8 @@ never starts the plugin process.
   decisions, exposed through `host.audit()`;
 - graceful shutdown: `close()` sends the protocol `shutdown` request and
   force-kills only after a bounded grace period;
+- a `host.list()` snapshot per the spec host contract: name, version, declared
+  capabilities, `Active|Disabled` status and invocation count;
 - per-plugin health counters for invocations, denials, crashes and the last
   error code, exposed through `host.health(plugin)`;
 - a local **offline** registry and a CLI that really spawns and handshakes.

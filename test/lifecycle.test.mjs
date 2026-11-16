@@ -2,10 +2,11 @@
 // lets a well-behaved plugin exit on its own, and force-kills a stubborn one.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Plugin, ROOT, SHUTDOWN_GRACE_MS } from '../lib/host.mjs';
+import { CapabilityHost } from '../lib/capabilities.mjs';
+import { Plugin, PluginCrashError, ROOT, SHUTDOWN_GRACE_MS } from '../lib/host.mjs';
 
 const FIXTURE = path.join(ROOT, 'test-fixtures', 'capability-plugin.mjs');
 const STUBBORN = path.join(ROOT, 'test-fixtures', 'stubborn-plugin.mjs');
@@ -67,4 +68,52 @@ test('a plugin that ignores shutdown is force-killed after the grace period', as
   // The grace period must elapse first; an immediate kill would drop cleanup time.
   assert.ok(elapsed >= SHUTDOWN_GRACE_MS - 50, `force-kill waited only ${elapsed} ms`);
   assert.ok(elapsed < SHUTDOWN_GRACE_MS + 5000, `force-kill waited ${elapsed} ms`);
+});
+
+test('list reports every registered plugin with Active status and counters', () => {
+  const host = new CapabilityHost({ permissions: { allow: [], deny: [] }, root: ROOT });
+  try {
+    const rows = host.list();
+    assert.equal(rows.length, 7);
+    const camera = rows.find((row) => row.name === 'camera');
+    assert.deepEqual(camera, {
+      name: 'camera',
+      version: '0.1.0',
+      capabilities: ['camera.takePhoto'],
+      status: 'Active',
+      invocations: 0,
+    });
+    assert.ok(Object.isFrozen(camera), 'rows must be frozen snapshots');
+    const storage = rows.find((row) => row.name === 'storage');
+    assert.deepEqual(storage.capabilities, ['storage.put', 'storage.get']);
+  } finally {
+    host.close();
+  }
+});
+
+test('list flips a plugin to Disabled while its circuit is open', async () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), 'opurom-list-'));
+  writeFileSync(path.join(stateDir, 'schedule'), 'crash\n');
+  const host = new CapabilityHost({
+    permissions: { allow: ['camera.takePhoto'], deny: [] },
+    root: ROOT,
+    overrides: new Map([['camera', FIXTURE]]),
+    timeoutMs: 1000,
+    threshold: 1,
+    cooldownMs: 60000,
+    env: {
+      OPR_TEST_STATE_DIR: stateDir,
+      OPR_TEST_PLUGIN: 'camera',
+      OPR_TEST_CAPABILITIES: 'camera.takePhoto',
+    },
+  });
+  try {
+    await assert.rejects(() => host.invoke('camera.takePhoto'), PluginCrashError);
+    const row = host.list().find((item) => item.name === 'camera');
+    assert.equal(row.status, 'Disabled');
+    assert.equal(row.invocations, 1);
+  } finally {
+    await host.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
