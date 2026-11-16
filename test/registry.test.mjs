@@ -7,6 +7,7 @@ import {
   loadRegistry,
   parseBinaryOverrides,
   resolveEntry,
+  resolveLoadOrder,
   resolveTimeout,
   validateManifest,
   validateRegistryEntry,
@@ -169,12 +170,41 @@ test('manifest validation rejects broken manifests', () => {
     [{ ...valid, capabilities: ['nodots'] }, 'capability'],
     [{ ...valid, entry: '' }, 'entry'],
     [{ ...valid, description: '' }, 'description'],
+    [{ ...valid, dependencies: 'b' }, 'dependencies must be an array'],
+    [{ ...valid, dependencies: ['B'] }, 'invalid dependency'],
+    [{ ...valid, dependencies: ['bb', 'bb'] }, 'duplicate dependency'],
+    [{ ...valid, dependencies: ['camera'] }, 'cannot depend on itself'],
   ];
   for (const [manifest, needle] of cases) {
     const errors = validateManifest(manifest);
     assert.ok(errors.length > 0, `expected an error for ${JSON.stringify(manifest)}`);
     assert.ok(errors.join('; ').includes(needle), errors.join('; '));
   }
+  assert.deepEqual(validateManifest({ ...valid, dependencies: ['other'] }), []);
+});
+
+test('the dependency graph orders dependencies first and rejects cycles', () => {
+  const entry = (name, dependencies) => ({
+    name,
+    version: '0.1.0',
+    path: `p/${name}`,
+    capabilities: [`${name}.cap`],
+    dependencies,
+  });
+  const { order, errors } = resolveLoadOrder({
+    version: 1,
+    plugins: [entry('a', ['b', 'c']), entry('b'), entry('c', ['b']), entry('d', ['missing'])],
+  });
+  assert.deepEqual(errors, ['plugin d depends on missing plugin missing']);
+  assert.equal(order.length, 4);
+  assert.ok(order.indexOf('b') < order.indexOf('a'), 'b must load before a');
+  assert.ok(order.indexOf('b') < order.indexOf('c'), 'b must load before c');
+
+  const loop = [entry('a', ['b']), entry('b', ['c']), entry('c', ['a'])];
+  assert.deepEqual(resolveLoadOrder({ version: 1, plugins: loop }).errors, [
+    'dependency cycle: a -> b -> c -> a',
+  ]);
+  assert.deepEqual(resolveLoadOrder({ version: 1, plugins: [entry('solo')] }).order, ['solo']);
 });
 
 test('manifest entry may not traverse out of the plugin directory', () => {

@@ -79,10 +79,6 @@ rl.on('line', (line) => {
     default:
       break;
   }
-  const result = results[request.capability];
-  if (!result) {
-    reply({ id: request.id, ok: false, error: `unknown capability: ${request.capability}` });
-  } else {
-    reply({ id: request.id, ok: true, result });
-  }
+  const result = results[request.capability] ?? { mock: true, capability: request.capability };
+  reply({ id: request.id, ok: true, result });
 });

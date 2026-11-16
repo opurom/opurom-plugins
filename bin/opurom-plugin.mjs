@@ -12,6 +12,7 @@ import {
   loadRegistry,
   parseBinaryOverrides,
   resolveEntry,
+  resolveLoadOrder,
   resolveTimeout,
   readManifest,
   validateRegistryEntry,
@@ -107,10 +108,32 @@ async function commandVerify(root, options) {
     for (const err of errors) process.stderr.write(`FAIL  <registry>  ${err}\n`);
     process.exit(1);
   }
+  // Spec dependency graph: dependencies verify first, and a plugin whose
+  // dependency failed verification is reported without being spawned.
+  const plugins = registry.plugins.map((entry) => ({
+    ...entry,
+    dependencies: readManifest(path.resolve(root, entry.path)).manifest?.dependencies ?? [],
+  }));
+  const { order, errors: graphErrors } = resolveLoadOrder({ version: registry.version, plugins });
+  if (graphErrors.length > 0) {
+    for (const err of graphErrors) process.stderr.write(`FAIL  <graph>  ${err}\n`);
+    process.exit(1);
+  }
+  const byName = new Map(registry.plugins.map((entry) => [entry.name, entry]));
   const results = [];
-  for (const entry of registry.plugins) {
+  const failedNames = new Set();
+  for (const name of order) {
+    const entry = byName.get(name);
+    const brokenDependency = (entry.dependencies ?? []).find((dep) => failedNames.has(dep));
+    if (brokenDependency) {
+      failedNames.add(name);
+      results.push({ name, ok: false, capabilities: entry.capabilities ?? [] });
+      process.stdout.write(`FAIL  ${name}\n      dependency ${brokenDependency} failed verification\n`);
+      continue;
+    }
     const result = await verifyEntry(entry, root, options);
     results.push(result);
+    if (!result.ok) failedNames.add(name);
     const label = result.ok ? 'PASS' : 'FAIL';
     if (result.ok) {
       process.stdout.write(`${label}  ${result.name}  ${result.capabilities.join(', ')}\n`);

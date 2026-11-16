@@ -149,7 +149,8 @@ node bin/opurom-plugin.mjs invoke storage storage.get '{"key":"theme"}'
 ```
 
 `verify` parses every manifest, validates its fields, checks that its entry is
-an executable inside the plugin directory, spawns the plugin, performs a real
+an executable inside the plugin directory, walks the dependency graph, spawns
+each plugin in dependency order, performs a real
 `hello` handshake and one real `invoke`, and prints `PASS`/`FAIL` per plugin.
 
 The legacy `invoke` command is retained for protocol compatibility. Add
@@ -280,7 +281,7 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **85 tests**: 39 protocol, CLI, registry and recovery tests, 19
+`npm test` runs **89 tests**: 40 protocol, CLI, registry and recovery tests, 22
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
 health-snapshot tests, 12 market-client tests and 5 lifecycle tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the
@@ -291,7 +292,10 @@ validation of entries, names and capability claims, every capability's
 deterministic reply, the permission matrix, deny precedence and default deny,
 manifest validation, deterministic permission checks, CLI grant/deny, crash
 recovery, malformed-frame recovery, breaker states with cooldown, timeout
-bounds, no leftover child processes, shutdown delivery on close with a
+bounds, no leftover child processes, dependency-graph validation (missing
+dependencies, cycles with the cycle path, dependency-first load order and
+no spawn for a consumer with an unloadable dependency), shutdown delivery on
+close with a
 force-kill fallback for plugins that never leave, a `list()` snapshot per the
 host contract (declared capabilities, `Active|Disabled` status and invocation
 count), a bounded append-only audit
@@ -316,6 +320,14 @@ install plans. `npm test` output includes test names containing `capability`,
 `name` matches `[a-z][a-z0-9-]{1,31}`, `version` is `x.y.z`, `protocol` is
 `"1.0"`, capabilities are non-empty dotted names, and `entry` resolves to an
 executable file inside the plugin directory (no `..`).
+
+A manifest may declare `dependencies: ["other-plugin", ...]` (names only, no
+version ranges — the registry pins one version per name). The host validates
+the graph at construction: a missing dependency or a cycle (the diagnostic
+carries the cycle path) fails the host before anything spawns, and an
+invocation refuses to spawn its plugin while a declared dependency cannot
+load (`ERR_PLUGIN_DEPENDENCY`). `verify` runs in dependency order and reports
+a consumer whose dependency failed verification without spawning it.
 
 ## Integration with `opurom-core`
 
@@ -348,6 +360,8 @@ never starts the plugin process.
   force-kills only after a bounded grace period;
 - a `host.list()` snapshot per the spec host contract: name, version, declared
   capabilities, `Active|Disabled` status and invocation count;
+- dependency-graph validation per the spec: dependencies must exist, cycles
+  are rejected with their path, and dependencies load before their consumers;
 - per-plugin health counters for invocations, denials, crashes and the last
   error code, exposed through `host.health(plugin)`;
 - a local **offline** registry and a CLI that really spawns and handshakes.

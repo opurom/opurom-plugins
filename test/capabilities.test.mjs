@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   CapabilityUndeclaredError,
   CircuitOpenError,
   PermissionManifestError,
+  PluginDependencyError,
   loadCapabilityCatalog,
   validatePermissionManifest,
 } from '../lib/capabilities.mjs';
@@ -156,6 +157,125 @@ test('registry-declared storage capabilities are grantable and health-attributed
     });
   } finally {
     await host.close();
+  }
+});
+
+// Two-plugin dependency fixture: `a` depends on `b`; both use the mock fixture
+// binary through overrides when their real executables should exist.
+function writeDependencyFixture(root, { registry, manifests }) {
+  writeFileSync(path.join(root, 'registry.json'), JSON.stringify({ version: 1, plugins: registry }));
+  for (const manifest of manifests) {
+    mkdirSync(path.join(root, 'plugins', manifest.name), { recursive: true });
+    writeFileSync(path.join(root, 'plugins', manifest.name, 'plugin.json'), JSON.stringify(manifest));
+  }
+}
+
+const DEP_MANIFESTS = [
+  {
+    name: 'alpha',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['alpha.cap'],
+    entry: './bin/a',
+    description: 'Consumer',
+    dependencies: ['beta'],
+  },
+  {
+    name: 'beta',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['beta.cap'],
+    entry: './bin/b',
+    description: 'Dependency',
+  },
+];
+
+const DEP_REGISTRY = [
+  { name: 'alpha', version: '0.1.0', path: 'plugins/alpha', capabilities: ['alpha.cap'] },
+  { name: 'beta', version: '0.1.0', path: 'plugins/beta', capabilities: ['beta.cap'] },
+];
+
+test('a missing or cyclic dependency fails host construction', () => {
+  const missing = mkdtempSync(path.join(tmpdir(), 'opurom-deps-'));
+  try {
+    writeDependencyFixture(missing, { registry: [DEP_REGISTRY[0]], manifests: DEP_MANIFESTS });
+    assert.throws(
+      () => new CapabilityHost({ grants: ['alpha.cap'], root: missing }),
+      (err) => err instanceof CapabilityHostError && /depends on missing plugin beta/.test(err.message),
+    );
+  } finally {
+    rmSync(missing, { recursive: true, force: true });
+  }
+
+  const cyclic = mkdtempSync(path.join(tmpdir(), 'opurom-deps-'));
+  try {
+    const cyclicManifests = [
+      DEP_MANIFESTS[0],
+      { ...DEP_MANIFESTS[1], dependencies: ['alpha'] },
+    ];
+    writeDependencyFixture(cyclic, { registry: DEP_REGISTRY, manifests: cyclicManifests });
+    assert.throws(
+      () => new CapabilityHost({ grants: ['alpha.cap'], root: cyclic }),
+      (err) => err instanceof CapabilityHostError && /dependency cycle: alpha -> beta -> alpha/.test(err.message),
+    );
+  } finally {
+    rmSync(cyclic, { recursive: true, force: true });
+  }
+});
+
+test('a consumer is not spawned when its dependency cannot load', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-deps-'));
+  try {
+    writeDependencyFixture(root, { registry: DEP_REGISTRY, manifests: DEP_MANIFESTS });
+    const host = new CapabilityHost({
+      grants: ['alpha.cap'],
+      root,
+      overrides: new Map([['alpha', FIXTURE]]),
+      timeoutMs: 1000,
+      env: { OPR_TEST_PLUGIN: 'alpha', OPR_TEST_CAPABILITIES: 'alpha.cap' },
+    });
+    try {
+      await assert.rejects(
+        () => host.invoke('alpha.cap'),
+        (err) => {
+          assert.ok(err instanceof PluginDependencyError);
+          assert.equal(err.code, 'ERR_PLUGIN_DEPENDENCY');
+          assert.match(err.message, /dependency beta of alpha cannot load/);
+          return true;
+        },
+      );
+      assert.equal(host.spawnCount, 0);
+    } finally {
+      await host.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a resolvable dependency chain serves the consumer', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-deps-'));
+  try {
+    writeDependencyFixture(root, { registry: DEP_REGISTRY, manifests: DEP_MANIFESTS });
+    const host = new CapabilityHost({
+      grants: ['alpha.cap'],
+      root,
+      overrides: new Map([
+        ['alpha', FIXTURE],
+        ['beta', FIXTURE],
+      ]),
+      timeoutMs: 1000,
+      env: { OPR_TEST_PLUGIN: 'alpha', OPR_TEST_CAPABILITIES: 'alpha.cap' },
+    });
+    try {
+      const result = await host.invoke('alpha.cap');
+      assert.equal(result.mock, true);
+      assert.equal(host.spawnCount, 1, 'only the consumer process runs per invocation');
+    } finally {
+      await host.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
