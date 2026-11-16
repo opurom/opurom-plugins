@@ -92,6 +92,7 @@ test/capabilities.test.mjs    permission and real process tests for grants, deni
 test/audit.test.mjs           bounded invocation audit-trail tests
 test/health.test.mjs          per-plugin health snapshot tests
 test/market.test.mjs          market listing, resolution and permission-gated install tests
+test/lifecycle.test.mjs       graceful shutdown delivery, clean exit and force-kill fallback
 test/                         node:test conformance suite
 test-fixtures/                test-only plugin stubs
 scripts/build.sh              builds all seven plugins with cargo
@@ -109,12 +110,14 @@ to stderr only; stdout carries nothing but responses.
 {"id":1,"ok":true,"result":{"path":"/tmp/opurom-photo.png","quality":"high","width":640,"height":480}}
 {"id":2,"method":"invoke","capability":"camera.nope","params":{}}
 {"id":2,"ok":false,"error":"unknown capability: camera.nope"}
+{"id":3,"method":"shutdown"}
+{"id":3,"ok":true,"result":null}
 ```
 
 Every plugin in this repo answers `hello` with its name, version and declared
 capabilities; answers `invoke` for declared capabilities only; returns a typed
 error for an unknown capability; recovers from a malformed request line; echoes
-the request `id`; and writes logs to stderr only.
+the request `id`; exits on `shutdown`; and writes logs to stderr only.
 
 ## Build
 
@@ -174,6 +177,10 @@ returns `ERR_PERMISSION_MANIFEST`. An undeclared capability returns
 
 `CapabilityHost` spawns a fresh process per granted call, validates its hello
 frame and its invocation response, and always waits for process exit on close.
+`close()` first sends the protocol `shutdown` request and closes stdin, waits
+for the plugin to leave, and sends `SIGKILL` only if it is still alive after
+`SHUTDOWN_GRACE_MS` (500 ms), so a well-behaved plugin always gets the chance
+to clean up.
 An abrupt exit, broken pipe, timeout or malformed JSON-lines frame becomes a
 typed error; the host stays alive and the next call gets a fresh process.
 
@@ -261,16 +268,20 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **78 tests**: 39 protocol, CLI, registry and recovery tests, 17
+`npm test` runs **81 tests**: 39 protocol, CLI, registry and recovery tests, 17
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
-health-snapshot tests and 12 market-client tests.
+health-snapshot tests, 12 market-client tests and 3 shutdown-lifecycle tests.
+Files run serially (`--test-concurrency=1`) because the suite shares the
+storage plugin's persisted state and parallel load breaks tight timeout
+budgets.
 They cover the capability catalog, registry declarations, whole-registry
 validation of entries, names and capability claims, every capability's
 deterministic reply, the permission matrix, deny precedence and default deny,
 manifest validation, deterministic permission checks, CLI grant/deny, crash
 recovery, malformed-frame recovery, breaker states with cooldown, timeout
-bounds, no leftover child processes, a bounded append-only audit trail
-over allowed, denied and failed invocations, exact per-plugin health
+bounds, no leftover child processes, shutdown delivery on close with a
+force-kill fallback for plugins that never leave, a bounded append-only audit
+trail over allowed, denied and failed invocations, exact per-plugin health
 counters for invocations, denials, crashes and the last error code, and
 deterministic market listing, search, digest resolution and permission-gated
 install plans. `npm test` output includes test names containing `capability`,
@@ -318,6 +329,8 @@ never starts the plugin process.
   breaker, cooldown recovery and child-process reaping;
 - a bounded, append-only invocation audit trail of allowed, denied and failed
   decisions, exposed through `host.audit()`;
+- graceful shutdown: `close()` sends the protocol `shutdown` request and
+  force-kills only after a bounded grace period;
 - per-plugin health counters for invocations, denials, crashes and the last
   error code, exposed through `host.health(plugin)`;
 - a local **offline** registry and a CLI that really spawns and handshakes.

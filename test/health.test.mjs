@@ -59,7 +59,9 @@ test('health stays zero and frozen until the plugin is actually invoked', async 
 });
 
 test('health counts invocations and denials per plugin with their error codes', async () => {
-  await withHost({ deny: ['share.send'] }, async (host) => {
+  // Counting semantics only; the wide budget keeps the live spawn immune to
+  // parallel test-file load on slow machines.
+  await withHost({ deny: ['share.send'], timeoutMs: 1000 }, async (host) => {
     assert.equal((await host.invoke('camera.takePhoto')).mock, true);
     assert.deepEqual(host.health('camera'), {
       plugin: 'camera',
