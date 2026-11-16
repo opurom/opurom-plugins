@@ -69,6 +69,10 @@ jobs:
               git clone --depth 1 "https://github.com/opurom/opurom-render.git" opurom-render
               git clone --depth 1 "https://github.com/opurom/opurom-examples.git" opurom-examples
               ;;
+            opurom-plugins)
+              # Signature verification imports opurom-pkg's verifyBytes.
+              git clone --depth 1 "https://github.com/opurom/opurom-pkg.git" opurom-pkg
+              ;;
             opurom-examples)
               for repo in opurom-core opurom-lang opurom-render opurom-cli; do
                 git clone --depth 1 "https://github.com/opurom/${repo}.git" "$repo"

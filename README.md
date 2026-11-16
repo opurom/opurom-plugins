@@ -34,6 +34,15 @@ construction. The native capabilities are:
 The `storage` compatibility plugin declares `storage.put` and `storage.get`,
 which are grantable through the same manifest.
 
+`plugin.json` may add optional `author`, `repository` and `license` metadata.
+When present each must be a non-empty string (max 200, 300 and 200 chars);
+unknown fields stay allowed for forward compatibility and none of these fields
+influence trust. A `registry.json` entry may carry optional
+`provenance: { source, digest }`; its shape is validated, and its `source` and
+`digest` must match the signed `opurom-install.json` record in the plugin
+directory, or host construction fails — a hand-edited registry cannot bypass
+the verified chain.
+
 Every plugin declares its capability in both `registry.json` and its
 `plugins/<name>/plugin.json` manifest. The app supplies a **permission
 manifest** to `CapabilityHost`: `permissions: { allow: [...], deny: [...] }`
@@ -281,9 +290,9 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **89 tests**: 40 protocol, CLI, registry and recovery tests, 22
+`npm test` runs **96 tests**: 42 protocol, CLI, registry and recovery tests, 22
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
-health-snapshot tests, 12 market-client tests and 5 lifecycle tests.
+health-snapshot tests, 16 market-client tests and 5 lifecycle tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the
 storage plugin's persisted state and parallel load breaks tight timeout
 budgets.
@@ -301,8 +310,12 @@ host contract (declared capabilities, `Active|Disabled` status and invocation
 count), a bounded append-only audit
 trail over allowed, denied and failed invocations, exact per-plugin health
 counters for invocations, denials, crashes and the last error code, and
-deterministic market listing, search, digest resolution and permission-gated
-install plans. `npm test` output includes test names containing `capability`,
+deterministic market listing (one entry per name at its highest semver
+version), opt-in GitHub discovery with a 24h cache and an offline degradation
+notice, digest resolution, permission-gated install plans and the five-gate
+signed install (permission → sha256 → opurom-pkg `verifyBytes` → atomic landing
+→ host load-time provenance check). `npm test` output includes test names
+containing `capability`,
 `permission`, `deny` and `market`.
 
 ## Add a plugin

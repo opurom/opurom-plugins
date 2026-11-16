@@ -10,6 +10,7 @@ import {
   resolveLoadOrder,
   resolveTimeout,
   validateManifest,
+  validateProvenance,
   validateRegistryEntry,
   verifyEntry,
   ROOT,
@@ -181,6 +182,30 @@ test('manifest validation rejects broken manifests', () => {
     assert.ok(errors.join('; ').includes(needle), errors.join('; '));
   }
   assert.deepEqual(validateManifest({ ...valid, dependencies: ['other'] }), []);
+  for (const field of ['author', 'repository', 'license']) {
+    assert.deepEqual(validateManifest({ ...valid, [field]: 'ok' }), []);
+    assert.ok(validateManifest({ ...valid, [field]: '' }).join('; ').includes(field));
+    assert.ok(validateManifest({ ...valid, [field]: 7 }).join('; ').includes(field));
+    assert.ok(validateManifest({ ...valid, [field]: 'x'.repeat(301) }).join('; ').includes(field));
+  }
+  assert.deepEqual(validateManifest({ ...valid, futureField: 'ignored' }), []);
+});
+
+test('optional provenance enforces its shape', () => {
+  assert.deepEqual(
+    validateProvenance({ source: 'opurom/plugins', digest: 'a'.repeat(64) }),
+    [],
+  );
+  assert.deepEqual(validateProvenance(undefined), []);
+  assert.ok(validateProvenance({ source: 'bad' }).length > 0);
+  assert.ok(validateProvenance({ source: 'a/b', digest: 'xyz' }).length > 0);
+  assert.ok(validateProvenance([]).length > 0);
+  assert.ok(
+    validateRegistryEntry({
+      ...VALID_ENTRY,
+      provenance: { source: 'a/b', digest: 'xyz' },
+    }).length > 0,
+  );
 });
 
 test('the dependency graph orders dependencies first and rejects cycles', () => {

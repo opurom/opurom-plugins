@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import test from 'node:test';
 import path from 'node:path';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   MarketError,
+  installMarketPackage,
   listMarket,
+  listMarketGithub,
   planInstall,
   resolveMarketPackage,
   searchMarket,
@@ -258,6 +261,246 @@ test('the CLI market root honours OPR_MARKET_ROOT', async () => {
     assert.equal(listed.code, 0, listed.stderr);
     const packages = JSON.parse(listed.stdout);
     assert.deepEqual(packages.map((entry) => entry.name), ['opurom-only']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listing keeps one entry per name at the highest semver version', () => withMarket(
+  (root) => {
+    addPackage(root, 'multi', '0.1.0', ['a.opu', 'opurom-pkg.json']);
+    addPackage(root, 'multi', '0.2.0', ['b.opu', 'opurom-pkg.json'], {
+      description: 'newest',
+      author: 'Alice',
+      repository: 'opurom/multi',
+      license: 'MIT',
+    });
+    addPackage(root, 'multi', '0.10.0', ['c.opu', 'opurom-pkg.json']);
+  },
+  (root) => {
+    const rows = listMarket({ registryRoot: root });
+    assert.deepEqual(rows.map((row) => `${row.name}@${row.version}`), ['multi@0.10.0']);
+    assert.equal(rows[0].author, null);
+    const search = searchMarket('multi', { registryRoot: root });
+    assert.equal(search.length, 1);
+    assert.equal(search[0].downloads, 'n/a (no telemetry)');
+  },
+));
+
+test('github discovery is opt-in and degrades to local order offline', () => withMarket(
+  (root) => addPackage(root, 'opurom-ui', '0.1.0', ['button.opu', 'opurom-pkg.json']),
+  async (root) => {
+    const options = { registryRoot: root };
+    const result = await listMarketGithub('opurom/missing', {
+      ...options,
+      githubModule: { createGithubRegistry: () => ({ search: async () => { throw new Error('offline'); } }) },
+    });
+    assert.equal(result.degraded, true);
+    assert.match(result.notice, /using local deterministic order/);
+    assert.deepEqual(result.packages.map((row) => row.name), ['opurom-ui']);
+
+    const online = await listMarketGithub('opurom/plugins', {
+      ...options,
+      githubClient: {
+        search: async () => [
+          { name: 'opurom-ui', version: '0.2.0', releaseUrl: 'https://example.invalid/r', signed: true },
+        ],
+      },
+    });
+    assert.equal(online.degraded, false);
+    assert.equal(online.packages[0].version, '0.2.0');
+    assert.equal(online.packages[0].downloads, 'n/a (no telemetry)');
+  },
+));
+
+// Signed install fixture: a node:test-only Ed25519 signer produces the record
+// signature; verification in lib always goes through opurom-pkg's verifyBytes.
+function signedInstallFixture(root, registryRoot, { tamperFile = false, tamperSignature = false } = {}) {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const packageDir = path.join(registryRoot, 'probe', '0.1.0');
+  mkdirSync(path.join(packageDir, 'bin'), { recursive: true });
+  const files = ['bin/probe', 'opurom-pkg.json', 'plugin.json'];
+  writeFileSync(path.join(packageDir, 'bin/probe'), '#!/usr/bin/env node\nprocess.stdout.write("ok\\n");\n', { mode: 0o755 });
+  writeJson(path.join(packageDir, 'plugin.json'), {
+    name: 'probe',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    entry: './bin/probe',
+    description: 'Install probe',
+  });
+  writeJson(path.join(packageDir, 'opurom-pkg.json'), {
+    name: 'probe',
+    version: '0.1.0',
+    files,
+    capability: 'camera.takePhoto',
+  });
+  const digests = files.map((file) => ({
+    path: file,
+    sha256: createHash('sha256').update(readFileSync(path.join(packageDir, file))).digest('hex'),
+  }));
+  const digest = createHash('sha256')
+    .update([...digests].sort((a, b) => (a.path < b.path ? -1 : 1)).map((file) => `${file.path}  ${file.sha256}\n`).join(''))
+    .digest('hex');
+  const record = { name: 'probe', version: '0.1.0', source: 'opurom/probe', digest, files: digests };
+  const recordBytes = Buffer.from(`${JSON.stringify(record)}\n`);
+  const payload = Buffer.concat([Buffer.from('probe@0.1.0/opurom-install.json\n'), recordBytes]);
+  const signature = sign(null, payload, privateKey);
+  writeFileSync(path.join(packageDir, 'opurom-install.json'), recordBytes);
+  writeFileSync(
+    path.join(packageDir, 'opurom-install.json.sig'),
+    tamperSignature ? Buffer.from('bad-signature') : signature,
+  );
+  if (tamperFile) writeFileSync(path.join(packageDir, 'bin/probe'), 'tampered\n');
+  writeJson(path.join(root, 'registry.json'), { version: 1, plugins: [] });
+  return { publicKey };
+}
+
+test('install passes permission, digest, signature, atomic landing and host gates', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-install-root-'));
+  const registryRoot = mkdtempSync(path.join(tmpdir(), 'opurom-install-reg-'));
+  try {
+    const { publicKey } = signedInstallFixture(root, registryRoot);
+    const host = new CapabilityHost({
+      permissions: { allow: ['camera.takePhoto'], deny: [] },
+      root: ROOT,
+    });
+    try {
+      const installed = installMarketPackage('probe', '0.1.0', host, {
+        root,
+        registryRoot,
+        source: 'opurom/probe',
+        publicKey,
+      });
+      assert.equal(installed.name, 'probe');
+      assert.match(installed.digest, /^[0-9a-f]{64}$/);
+      const registry = JSON.parse(readFileSync(path.join(root, 'registry.json'), 'utf8'));
+      assert.equal(registry.plugins.length, 1);
+      assert.deepEqual(registry.plugins[0].provenance, {
+        source: 'opurom/probe',
+        digest: installed.digest,
+      });
+      assert.ok(existsSync(path.join(root, 'plugins', 'probe', 'bin', 'probe')));
+      // Gate 5: a host accepts the landed provenance with the matching key.
+      const loaded = new CapabilityHost({
+        permissions: { allow: ['camera.takePhoto'], deny: [] },
+        root,
+        publicKey,
+      });
+      await loaded.close();
+    } finally {
+      await host.close();
+    }
+
+    // A tampered signature is rejected before the registry changes.
+    const badRoot = mkdtempSync(path.join(tmpdir(), 'opurom-install-bad-'));
+    const badRegistry = mkdtempSync(path.join(tmpdir(), 'opurom-install-badreg-'));
+    try {
+      const bad = signedInstallFixture(badRoot, badRegistry, { tamperSignature: true });
+      const host2 = new CapabilityHost({
+        permissions: { allow: ['camera.takePhoto'], deny: [] },
+        root: ROOT,
+      });
+      try {
+        assert.throws(
+          () => installMarketPackage('probe', '0.1.0', host2, {
+            root: badRoot,
+            registryRoot: badRegistry,
+            source: 'opurom/probe',
+            publicKey: bad.publicKey,
+          }),
+          (err) => err instanceof MarketError && err.code === 'ERR_MARKET_SIGNATURE',
+        );
+        assert.deepEqual(JSON.parse(readFileSync(path.join(badRoot, 'registry.json'), 'utf8')).plugins, []);
+      } finally {
+        await host2.close();
+      }
+    } finally {
+      rmSync(badRoot, { recursive: true, force: true });
+      rmSync(badRegistry, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(registryRoot, { recursive: true, force: true });
+  }
+});
+
+test('a tampered package file fails digest integrity and a tampered registry provenance fails host construction', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-tamper-root-'));
+  const registryRoot = mkdtempSync(path.join(tmpdir(), 'opurom-tamper-reg-'));
+  try {
+    const { publicKey } = signedInstallFixture(root, registryRoot, { tamperFile: true });
+    const host = new CapabilityHost({
+      permissions: { allow: ['camera.takePhoto'], deny: [] },
+      root: ROOT,
+    });
+    try {
+      assert.throws(
+        () => installMarketPackage('probe', '0.1.0', host, {
+          root,
+          registryRoot,
+          source: 'opurom/probe',
+          publicKey,
+        }),
+        (err) => err instanceof MarketError && err.code === 'ERR_MARKET_INTEGRITY',
+      );
+    } finally {
+      await host.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(registryRoot, { recursive: true, force: true });
+  }
+
+  const badRoot = mkdtempSync(path.join(tmpdir(), 'opurom-provenance-root-'));
+  const badRegistry = mkdtempSync(path.join(tmpdir(), 'opurom-provenance-reg-'));
+  try {
+    const { publicKey } = signedInstallFixture(badRoot, badRegistry);
+    const host = new CapabilityHost({
+      permissions: { allow: ['camera.takePhoto'], deny: [] },
+      root: ROOT,
+    });
+    try {
+      installMarketPackage('probe', '0.1.0', host, {
+        root: badRoot,
+        registryRoot: badRegistry,
+        source: 'opurom/probe',
+        publicKey,
+      });
+      const registryFile = path.join(badRoot, 'registry.json');
+      const registry = JSON.parse(readFileSync(registryFile, 'utf8'));
+      registry.plugins[0].provenance.source = 'evil/fork';
+      writeFileSync(registryFile, JSON.stringify(registry));
+      assert.throws(
+        () => new CapabilityHost({
+          permissions: { allow: ['camera.takePhoto'], deny: [] },
+          root: badRoot,
+          publicKey,
+        }),
+        /provenance mismatch for probe/,
+      );
+    } finally {
+      await host.close();
+    }
+  } finally {
+    rmSync(badRoot, { recursive: true, force: true });
+    rmSync(badRegistry, { recursive: true, force: true });
+  }
+});
+
+test('the CLI market list --github degrades with a visible notice', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-market-github-cli-'));
+  try {
+    addPackage(root, 'opurom-ui', '0.1.0', ['button.opu', 'opurom-pkg.json']);
+    const result = await runCli(['market', 'list', '--github', 'opurom/plugins'], {
+      env: {
+        OPR_MARKET_ROOT: root,
+        Opurom_GITHUB_API_URL: 'http://127.0.0.1:1',
+      },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /github discovery unavailable/);
+    assert.equal(JSON.parse(result.stdout)[0].name, 'opurom-ui');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

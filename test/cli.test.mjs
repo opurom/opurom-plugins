@@ -94,3 +94,10 @@ test('no arguments exits 2 and prints the usage', async () => {
   assert.equal(code, 2);
   assert.match(stdout, /usage: opurom-plugin/);
 });
+
+test('list shows optional author, repository and license columns', async () => {
+  const { code, stdout } = await runCli(['list']);
+  assert.equal(code, 0);
+  const header = stdout.split('\n')[0];
+  for (const column of ['AUTHOR', 'REPOSITORY', 'LICENSE']) assert.match(header, new RegExp(column));
+});

@@ -7,6 +7,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   ROOT,
   buildPlugins,
+  checkProvenanceRecord,
   handshake,
   invokeCapability,
   loadRegistry,
@@ -19,7 +20,15 @@ import {
   verifyEntry,
 } from '../lib/host.mjs';
 import { CapabilityHost } from '../lib/capabilities.mjs';
-import { MARKET_ROOT, listMarket, planInstall, resolveMarketPackage, searchMarket } from '../lib/market.mjs';
+import {
+  MARKET_ROOT,
+  installMarketPackage,
+  listMarket,
+  listMarketGithub,
+  planInstall,
+  resolveMarketPackage,
+  searchMarket,
+} from '../lib/market.mjs';
 
 const USAGE = `usage: opurom-plugin <command>
 
@@ -28,9 +37,13 @@ const USAGE = `usage: opurom-plugin <command>
   invoke <plugin> <capability> [json-params] [--grant csv] [--deny csv]
                                     invoke; --grant/--deny use the permission host
   market list [query]               list (or search) packages in the opurom-pkg registry
+  market list --github <owner/repo> [query]
+                                    opt-in GitHub discovery; degrades to local order offline
   market resolve <name> <version>   resolve a package to its files and sha256 digests
   market plan <name> <version> [--grant csv] [--deny csv]
                                     resolve an install plan, gated by the permission host
+  market install <name> <version> --source owner/repo [--grant csv] [--deny csv]
+                                    verify and atomically install a signed package
 
 environment:
   OPR_PLUGIN_BIN      "camera=/abs/path,storage=/abs/path" overrides plugin executables
@@ -84,12 +97,16 @@ async function commandList(root) {
     for (const err of errors) process.stderr.write(`error: ${err}\n`);
     process.exit(1);
   }
-  const rows = [['NAME', 'VERSION', 'CAPABILITIES', 'PATH']];
+  const rows = [['NAME', 'VERSION', 'CAPABILITIES', 'AUTHOR', 'REPOSITORY', 'LICENSE', 'PATH']];
   for (const entry of registry.plugins) {
+    const { manifest } = readManifest(path.resolve(root, entry.path));
     rows.push([
       String(entry.name ?? ''),
       String(entry.version ?? ''),
       (Array.isArray(entry.capabilities) ? entry.capabilities : []).join(','),
+      String(manifest?.author ?? ''),
+      String(manifest?.repository ?? ''),
+      String(manifest?.license ?? ''),
       String(entry.path ?? ''),
     ]);
   }
@@ -124,6 +141,16 @@ async function commandVerify(root, options) {
   const failedNames = new Set();
   for (const name of order) {
     const entry = byName.get(name);
+    if (entry.provenance) {
+      try {
+        checkProvenanceRecord(entry, root, {});
+      } catch (err) {
+        results.push({ name, ok: false, capabilities: entry.capabilities ?? [] });
+        process.stdout.write(`FAIL  ${name}\n      ${err.message}\n`);
+        failedNames.add(name);
+        continue;
+      }
+    }
     const brokenDependency = (entry.dependencies ?? []).find((dep) => failedNames.has(dep));
     if (brokenDependency) {
       failedNames.add(name);
@@ -227,9 +254,48 @@ async function commandMarket(root, rest, options) {
   const [subcommand, ...args] = rest;
   const marketOptions = { registryRoot, timeoutMs: options.timeoutMs, deny: options.denies };
   if (subcommand === 'list') {
-    const rows = args.length > 0 ? searchMarket(args[0], marketOptions) : listMarket(marketOptions);
+    let query = args[0] ?? null;
+    let repository = null;
+    if (args[0] === '--github') {
+      repository = args[1];
+      query = args[2] ?? null;
+      if (!repository) fail('market list --github needs <owner/repo>');
+    }
+    if (repository) {
+      const result = await listMarketGithub(repository, { ...marketOptions, query });
+      if (result.notice) process.stderr.write(`${result.notice}\n`);
+      process.stdout.write(`${JSON.stringify(result.packages)}\n`);
+      process.exit(0);
+    }
+    const rows = query ? searchMarket(query, marketOptions) : listMarket(marketOptions);
     process.stdout.write(`${JSON.stringify(rows)}\n`);
     process.exit(0);
+  }
+  if (subcommand === 'install') {
+    const [name, version] = args;
+    const sourceIndex = args.indexOf('--source');
+    const source = sourceIndex >= 0 ? args[sourceIndex + 1] : null;
+    if (!name || !version || !source) fail('market install needs <name> <version> --source owner/repo');
+    let host = null;
+    try {
+      host = new CapabilityHost({
+        permissions: { allow: options.grants ?? [], deny: options.denies },
+        root,
+        overrides: options.overrides,
+        timeoutMs: options.timeoutMs,
+      });
+      const installed = installMarketPackage(name, version, host, {
+        ...marketOptions,
+        root,
+        source,
+      });
+      process.stdout.write(`${JSON.stringify(installed)}\n`);
+    } catch (err) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: capabilityError(err) })}\n`);
+      process.exitCode = 1;
+    }
+    if (host) await host.close();
+    process.exit(process.exitCode ?? 0);
   }
   if (subcommand === 'resolve' || subcommand === 'plan') {
     const [name, version] = args;
