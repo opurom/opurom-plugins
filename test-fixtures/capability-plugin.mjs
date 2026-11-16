@@ -56,6 +56,12 @@ rl.on('line', (line) => {
     reply({ id: request.id, ok: true, result: { name: pluginName, version: '0.1.0', capabilities } });
     return;
   }
+  if (request.method === 'shutdown') {
+    // Marker proves the host sent `shutdown` before reaping the process.
+    appendFileSync(path.join(stateDir, 'shutdown'), 'yes\n');
+    reply({ id: request.id, ok: true, result: null });
+    return;
+  }
   if (request.method !== 'invoke') {
     reply({ id: request.id, ok: false, error: 'unknown method' });
     return;
