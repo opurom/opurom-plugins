@@ -116,7 +116,7 @@ async function commandVerify(root, options) {
   }));
   const { order, errors: graphErrors } = resolveLoadOrder({ version: registry.version, plugins });
   if (graphErrors.length > 0) {
-    for (const err of graphErrors) process.stderr.write(`FAIL  <graph>  ${err}\n`);
+    for (const err of graphErrors) process.stderr.write(`FAIL  <graph>  ${err.message}\n`);
     process.exit(1);
   }
   const byName = new Map(registry.plugins.map((entry) => [entry.name, entry]));

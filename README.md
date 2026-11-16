@@ -326,7 +326,10 @@ version ranges — the registry pins one version per name). The host validates
 the graph at construction: a missing dependency or a cycle (the diagnostic
 carries the cycle path) fails the host before anything spawns, and an
 invocation refuses to spawn its plugin while a declared dependency cannot
-load (`ERR_PLUGIN_DEPENDENCY`). `verify` runs in dependency order and reports
+load. Typed codes distinguish the failures: `ERR_DEPENDENCY_MISSING`,
+`ERR_DEPENDENCY_CYCLE` and `ERR_DEPENDENCY_DUPLICATE` for graph validation,
+`ERR_PLUGIN_DEPENDENCY` for a load failure at invocation time. `verify` runs
+in dependency order and reports
 a consumer whose dependency failed verification without spawning it.
 
 ## Integration with `opurom-core`

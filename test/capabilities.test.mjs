@@ -201,7 +201,10 @@ test('a missing or cyclic dependency fails host construction', () => {
     writeDependencyFixture(missing, { registry: [DEP_REGISTRY[0]], manifests: DEP_MANIFESTS });
     assert.throws(
       () => new CapabilityHost({ grants: ['alpha.cap'], root: missing }),
-      (err) => err instanceof CapabilityHostError && /depends on missing plugin beta/.test(err.message),
+      (err) =>
+        err instanceof PluginDependencyError &&
+        err.code === 'ERR_DEPENDENCY_MISSING' &&
+        /depends on missing plugin beta/.test(err.message),
     );
   } finally {
     rmSync(missing, { recursive: true, force: true });
@@ -216,7 +219,10 @@ test('a missing or cyclic dependency fails host construction', () => {
     writeDependencyFixture(cyclic, { registry: DEP_REGISTRY, manifests: cyclicManifests });
     assert.throws(
       () => new CapabilityHost({ grants: ['alpha.cap'], root: cyclic }),
-      (err) => err instanceof CapabilityHostError && /dependency cycle: alpha -> beta -> alpha/.test(err.message),
+      (err) =>
+        err instanceof PluginDependencyError &&
+        err.code === 'ERR_DEPENDENCY_CYCLE' &&
+        /dependency cycle: alpha -> beta -> alpha/.test(err.message),
     );
   } finally {
     rmSync(cyclic, { recursive: true, force: true });

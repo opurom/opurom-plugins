@@ -195,14 +195,20 @@ test('the dependency graph orders dependencies first and rejects cycles', () => 
     version: 1,
     plugins: [entry('a', ['b', 'c']), entry('b'), entry('c', ['b']), entry('d', ['missing'])],
   });
-  assert.deepEqual(errors, ['plugin d depends on missing plugin missing']);
+  assert.deepEqual(errors, [
+    { kind: 'missing', message: 'plugin d depends on missing plugin missing' },
+  ]);
   assert.equal(order.length, 4);
   assert.ok(order.indexOf('b') < order.indexOf('a'), 'b must load before a');
   assert.ok(order.indexOf('b') < order.indexOf('c'), 'b must load before c');
 
   const loop = [entry('a', ['b']), entry('b', ['c']), entry('c', ['a'])];
   assert.deepEqual(resolveLoadOrder({ version: 1, plugins: loop }).errors, [
-    'dependency cycle: a -> b -> c -> a',
+    { kind: 'cycle', message: 'dependency cycle: a -> b -> c -> a' },
+  ]);
+  const duplicated = [entry('dup', ['bb', 'bb']), entry('bb')];
+  assert.deepEqual(resolveLoadOrder({ version: 1, plugins: duplicated }).errors, [
+    { kind: 'duplicate', message: 'duplicate dependency: bb in plugin dup' },
   ]);
   assert.deepEqual(resolveLoadOrder({ version: 1, plugins: [entry('solo')] }).order, ['solo']);
 });
