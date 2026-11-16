@@ -189,7 +189,11 @@ The breaker states are `closed`,
 `CircuitOpenError.retryAfterMs` reports the remaining cooldown; one trial after
 cooldown closes the circuit on success or reopens it on failure. Defaults are
 three faults and 1000 ms, and an injected `clock` makes cooldown tests
-deterministic. `CapabilityHost.close()` reaps every active process; the suite
+deterministic. Per the spec fault policy, a later success resets the counter
+only for timeouts: a crash or malformed frame makes the count sticky, and a
+circuit opened by one stays `open` with no cooldown trial (`retryAfterMs` 0),
+so a crash loop can never refresh trust. `CapabilityHost.close()` reaps every
+active process; the suite
 checks that no child PIDs survive crashes, malformed frames and shutdown.
 
 ## Invocation audit trail
@@ -268,7 +272,7 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **83 tests**: 39 protocol, CLI, registry and recovery tests, 17
+`npm test` runs **84 tests**: 39 protocol, CLI, registry and recovery tests, 18
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
 health-snapshot tests, 12 market-client tests and 5 lifecycle tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the

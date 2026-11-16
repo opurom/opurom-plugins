@@ -13,7 +13,7 @@ import {
   PermissionManifestError,
   validatePermissionManifest,
 } from '../lib/capabilities.mjs';
-import { PluginCrashError, PluginProtocolError, ROOT, loadRegistry, readManifest } from '../lib/host.mjs';
+import { PluginCrashError, PluginProtocolError, PluginTimeoutError, ROOT, loadRegistry, readManifest } from '../lib/host.mjs';
 import { runCli } from '../test-support/helpers.mjs';
 
 const FIXTURE = path.join(ROOT, 'test-fixtures', 'capability-plugin.mjs');
@@ -357,7 +357,7 @@ test('CLI reports a malformed permission manifest as a typed error', async () =>
   assert.ok(body.error.errors.some((err) => err.includes('camera.nope')));
 });
 
-test('a crashing plugin process is isolated and the next call recovers', async () => {
+test('a crash keeps its breaker count even after a later success', async () => {
   await withFixtureHost({ schedule: 'crash,ok' }, async ({ host }) => {
     await assert.rejects(
       () => host.invoke('camera.takePhoto'),
@@ -368,14 +368,16 @@ test('a crashing plugin process is isolated and the next call recovers', async (
       },
     );
     assert.equal(host.breakerState('camera'), 'half-open');
+    // Spec fault policy: success never resets a count that holds a crash.
     const result = await host.invoke('camera.takePhoto');
     assert.equal(result.mock, true);
-    assert.equal(host.breakerState('camera'), 'closed');
+    assert.equal(host.breakerState('camera'), 'half-open');
+    assert.equal(host.consecutiveFailures('camera'), 1);
     assert.equal(host.spawnCount, 2);
   });
 });
 
-test('a malformed JSON-lines frame is isolated and the next call recovers', async () => {
+test('a frame violation keeps its breaker count even after a later success', async () => {
   await withFixtureHost({ schedule: 'garbage,ok' }, async ({ host }) => {
     await assert.rejects(
       () => host.invoke('camera.takePhoto'),
@@ -388,11 +390,11 @@ test('a malformed JSON-lines frame is isolated and the next call recovers', asyn
     assert.equal(host.consecutiveFailures('camera'), 1);
     const result = await host.invoke('camera.takePhoto');
     assert.equal(result.mock, true);
-    assert.equal(host.consecutiveFailures('camera'), 0);
+    assert.equal(host.consecutiveFailures('camera'), 1);
   });
 });
 
-test('circuit breaker states trip after configured failures and recover after cooldown', async () => {
+test('a circuit opened by crashes stays disabled with no cooldown trial', async () => {
   let now = 0;
   await withFixtureHost(
     { schedule: 'crash,crash,ok', threshold: 2, cooldownMs: 5, clock: () => now },
@@ -421,8 +423,29 @@ test('circuit breaker states trip after configured failures and recover after co
       );
       assert.equal(host.spawnCount, 2);
 
+      // Past the cooldown a crash-opened circuit still refuses to serve.
       now = 5;
+      await assert.rejects(
+        () => host.invoke('camera.takePhoto'),
+        (err) => err instanceof CircuitOpenError && err.retryAfterMs === 0,
+      );
       assert.equal(host.breakerState('camera'), 'open');
+      assert.equal(host.consecutiveFailures('camera'), 2);
+      assert.equal(host.spawnCount, 2);
+    },
+  );
+});
+
+test('a circuit opened by timeouts still recovers after cooldown', async () => {
+  let now = 0;
+  await withFixtureHost(
+    { schedule: 'hang,hang,ok', threshold: 2, cooldownMs: 5, clock: () => now },
+    async ({ host }) => {
+      for (let index = 0; index < 2; index += 1) {
+        await assert.rejects(() => host.invoke('camera.takePhoto'), PluginTimeoutError);
+      }
+      assert.equal(host.breakerState('camera'), 'open');
+      now = 5;
       const result = await host.invoke('camera.takePhoto');
       assert.equal(result.mock, true);
       assert.equal(host.breakerState('camera'), 'closed');
