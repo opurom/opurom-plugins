@@ -16,7 +16,11 @@ handshakes**; all devices behind them are **deterministic mocks**.
 
 ## Capability set and permission model
 
-The six native capabilities are exactly:
+The grantable capability catalog is **derived, not hardcoded**: a capability
+exists only when both `registry.json` and the plugin's `plugin.json` manifest
+declare it. The host derives the catalog once at construction; a broken
+registry or a manifest that disagrees with its registry entry fails host
+construction. The native capabilities are:
 
 | Capability | Plugin | Deterministic mock reply |
 | --- | --- | --- |
@@ -26,6 +30,9 @@ The six native capabilities are exactly:
 | `notification.show` | `notification` | a simulated delivery record with the title and message |
 | `payment.request` | `payment` | a fixed approved transaction with the requested amount |
 | `share.send` | `share` | a fixed share-sheet target with the title and text |
+
+The `storage` compatibility plugin declares `storage.put` and `storage.get`,
+which are grantable through the same manifest.
 
 Every plugin declares its capability in both `registry.json` and its
 `plugins/<name>/plugin.json` manifest. The app supplies a **permission
@@ -228,8 +235,9 @@ capabilities is counted once, a permission or declaration denial adds to
 `denials`, a dead plugin process adds to `crashes`, and `lastErrorCode` keeps
 the code of the most recent fault (`null` before the first one).
 
-The counters are keyed by the six-capability catalog, so the host tracks at most
-six plugins no matter how many attempts run, and they cover the whole lifetime
+The counters are keyed by the derived capability catalog, so the host tracks at
+most one entry per plugin no matter how many attempts run, and they cover the
+whole lifetime
 while the audit trail stays bounded at `AUDIT_LIMIT`. `check()` stays pure and
 records nothing.
 
@@ -272,7 +280,7 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **84 tests**: 39 protocol, CLI, registry and recovery tests, 18
+`npm test` runs **85 tests**: 39 protocol, CLI, registry and recovery tests, 19
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
 health-snapshot tests, 12 market-client tests and 5 lifecycle tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the
@@ -300,9 +308,9 @@ install plans. `npm test` output includes test names containing `capability`,
 2. Create `plugins/<name>/Cargo.toml` (a `[[bin]]` named `<name>` with no
    dependencies) and `plugins/<name>/src/main.rs`. New mock devices can call
    `protocol::run` from `rust/protocol.rs`; original plugins use `rust/json.rs`.
-3. Add the plugin name to `scripts/build.sh`, register it in `registry.json`,
-   and add its capability to `CAPABILITY_CATALOG` only if it is a native
-   capability. A new catalog entry also needs an entry in the app's `allow` list.
+3. Add the plugin name to `scripts/build.sh` and register it in `registry.json`.
+   Its capabilities become grantable automatically once both the registry entry
+   and the manifest declare them; add them to the app's `allow` list to grant.
 4. Check it: `node bin/opurom-plugin.mjs verify`.
 
 `name` matches `[a-z][a-z0-9-]{1,31}`, `version` is `x.y.z`, `protocol` is
@@ -324,7 +332,8 @@ never starts the plugin process.
 ## Status
 
 - seven real, separately built plugin processes speaking protocol v1;
-- six permission-gated native capabilities with deterministic **mock** replies;
+- permission-gated native capabilities (plus the `storage` compatibility
+  plugin) with deterministic **mock** replies;
 - an allow/deny permission manifest with deny precedence, default deny and
   strict validation, checked deterministically before any spawn;
 - typed denial for ungranted, explicitly denied or undeclared capabilities

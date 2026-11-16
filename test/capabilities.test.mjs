@@ -4,13 +4,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  CAPABILITIES,
-  CAPABILITY_CATALOG,
   CapabilityDeniedError,
   CapabilityHost,
+  CapabilityHostError,
   CapabilityUndeclaredError,
   CircuitOpenError,
   PermissionManifestError,
+  loadCapabilityCatalog,
   validatePermissionManifest,
 } from '../lib/capabilities.mjs';
 import { PluginCrashError, PluginProtocolError, PluginTimeoutError, ROOT, loadRegistry, readManifest } from '../lib/host.mjs';
@@ -31,6 +31,16 @@ const EXPECTED = {
   },
   'share.send': { shared: true, target: 'mock-share-sheet', title: '', text: '', mock: true },
 };
+
+// The six native capabilities; the derived catalog also carries storage.*.
+const NATIVE = [
+  'camera.takePhoto',
+  'geolocation.getCurrentPosition',
+  'bluetooth.scan',
+  'notification.show',
+  'payment.request',
+  'share.send',
+];
 
 function fixtureOverrides() {
   return new Map(
@@ -69,34 +79,28 @@ async function withFixtureHost(options, fn) {
   }
 }
 
-test('capability catalog declares the six native permissions', () => {
-  assert.deepEqual(CAPABILITIES, [
-    'camera.takePhoto',
-    'geolocation.getCurrentPosition',
-    'bluetooth.scan',
-    'notification.show',
-    'payment.request',
-    'share.send',
-  ]);
-  for (const capability of CAPABILITIES) {
-    assert.equal(CAPABILITY_CATALOG[capability].permission, capability);
+test('the derived catalog covers every registry and manifest declaration', () => {
+  const catalog = loadCapabilityCatalog(ROOT);
+  assert.deepEqual(Object.keys(catalog).sort(), [...NATIVE, 'storage.get', 'storage.put'].sort());
+  for (const capability of [...NATIVE, 'storage.put', 'storage.get']) {
+    assert.equal(catalog[capability].permission, capability);
   }
 });
 
 test('every capability is declared by its registry entry and manifest', () => {
+  const catalog = loadCapabilityCatalog(ROOT);
   const { registry, errors } = loadRegistry(ROOT);
   assert.deepEqual(errors, []);
-  for (const capability of CAPABILITIES) {
-    const name = CAPABILITY_CATALOG[capability].plugin;
-    const entry = registry.plugins.find((item) => item.name === name);
-    assert.ok(entry, `missing registry entry for ${name}`);
+  for (const [capability, meta] of Object.entries(catalog)) {
+    const entry = registry.plugins.find((item) => item.name === meta.plugin);
+    assert.ok(entry, `missing registry entry for ${meta.plugin}`);
     assert.ok(entry.capabilities.includes(capability));
     const { manifest } = readManifest(path.join(ROOT, entry.path));
     assert.ok(manifest.capabilities.includes(capability));
   }
 });
 
-test('an invalid registry is rejected before any plugin is spawned', async () => {
+test('a broken registry or manifest fails host construction before any spawn', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'opurom-registry-'));
   try {
     const entry = {
@@ -109,31 +113,47 @@ test('an invalid registry is rejected before any plugin is spawned', async () =>
       path.join(root, 'registry.json'),
       JSON.stringify({ version: 1, plugins: [entry, { ...entry }] }),
     );
-    const host = new CapabilityHost({ grants: ['camera.takePhoto'], root });
-    try {
-      await assert.rejects(
-        () => host.invoke('camera.takePhoto'),
-        (err) =>
-          err instanceof CapabilityUndeclaredError &&
-          err.code === 'ERR_CAPABILITY_UNDECLARED',
-      );
-      assert.equal(host.spawnCount, 0);
-    } finally {
-      await host.close();
-    }
+    assert.throws(
+      () => new CapabilityHost({ grants: ['camera.takePhoto'], root }),
+      (err) => err instanceof CapabilityHostError && /derive the capability catalog/.test(err.message),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('each capability grants a deterministic reply from a real mock-device process', async () => {
-  const host = new CapabilityHost({ grants: CAPABILITIES, root: ROOT, timeoutMs: 1000 });
+  const host = new CapabilityHost({ grants: NATIVE, root: ROOT, timeoutMs: 1000 });
   try {
-    for (const capability of CAPABILITIES) {
+    for (const capability of NATIVE) {
       const result = await host.invoke(capability, EXPECTED[capability].amount ? { amount: 100 } : {});
       assert.deepEqual(result, EXPECTED[capability], capability);
     }
-    assert.equal(host.spawnCount, CAPABILITIES.length);
+    assert.equal(host.spawnCount, NATIVE.length);
+  } finally {
+    await host.close();
+  }
+});
+
+test('registry-declared storage capabilities are grantable and health-attributed', async () => {
+  const host = new CapabilityHost({
+    grants: ['storage.put', 'storage.get'],
+    root: ROOT,
+    timeoutMs: 1000,
+  });
+  try {
+    const put = await host.invoke('storage.put', { key: 'grant', value: 5 });
+    assert.equal(put.stored, true);
+    assert.deepEqual(host.check('storage.get'), { allowed: true, reason: 'granted' });
+    const got = await host.invoke('storage.get', { key: 'grant' });
+    assert.deepEqual(got.value, 5);
+    assert.deepEqual(host.health('storage'), {
+      plugin: 'storage',
+      invocations: 2,
+      denials: 0,
+      crashes: 0,
+      lastErrorCode: null,
+    });
   } finally {
     await host.close();
   }
@@ -141,7 +161,7 @@ test('each capability grants a deterministic reply from a real mock-device proce
 
 test('permission matrix denies ungranted and undeclared capabilities without spawning', async () => {
   await withFixtureHost({ schedule: 'ok' }, async ({ host, stateDir }) => {
-    for (const capability of CAPABILITIES.slice(1)) {
+    for (const capability of NATIVE.slice(1)) {
       await assert.rejects(
         () => host.invoke(capability),
         (err) => {
@@ -199,7 +219,7 @@ test('an unrelated deny does not revoke a granted capability', async () => {
 test('an undeclared capability is denied by default without spawning', async () => {
   const host = new CapabilityHost({ permissions: { allow: [], deny: [] }, root: ROOT });
   try {
-    for (const capability of CAPABILITIES) {
+    for (const capability of NATIVE) {
       assert.deepEqual(host.check(capability), { allowed: false, reason: 'not-granted' });
       await assert.rejects(
         () => host.invoke(capability),
@@ -228,7 +248,7 @@ test('a malformed permission manifest is rejected with a typed, clear error', ()
     [{ allows: ['camera.takePhoto'] }, 'unknown permission manifest field'],
   ];
   for (const [manifest, needle] of cases) {
-    assert.ok(validatePermissionManifest(manifest).join('; ').includes(needle));
+    assert.ok(validatePermissionManifest(manifest, loadCapabilityCatalog(ROOT)).join('; ').includes(needle));
     assert.throws(
       () => new CapabilityHost({ permissions: manifest, root: ROOT }),
       (err) => {
@@ -242,7 +262,10 @@ test('a malformed permission manifest is rejected with a typed, clear error', ()
   }
   assert.throws(() => new CapabilityHost({ grants: 'camera.takePhoto' }), PermissionManifestError);
   assert.deepEqual(
-    validatePermissionManifest({ allow: ['camera.takePhoto'], deny: ['share.send'] }),
+    validatePermissionManifest(
+      { allow: ['camera.takePhoto'], deny: ['share.send'] },
+      loadCapabilityCatalog(ROOT),
+    ),
     [],
   );
 });
