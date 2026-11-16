@@ -114,9 +114,13 @@ fn save(path: &PathBuf, fields: &[(String, Json)]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("cannot create state dir: {err}"))?;
     }
-    // shortcut: whole-file rewrite without locking, upgrade when multiple hosts write concurrently.
+    // shortcut: whole-file rewrite without locking, upgrade when multiple hosts put concurrently.
     let text = Json::Obj(fields.to_vec()).to_text();
-    fs::write(path, format!("{text}\n")).map_err(|err| format!("cannot write state: {err}"))
+    // Write via a per-process temp + rename so concurrent readers never see a
+    // truncated file and concurrent writers never clobber each other's temp.
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    fs::write(&tmp, format!("{text}\n")).map_err(|err| format!("cannot write state: {err}"))?;
+    fs::rename(&tmp, path).map_err(|err| format!("cannot commit state: {err}"))
 }
 
 fn invoke(capability: &str, params: &Json) -> Result<Json, String> {
