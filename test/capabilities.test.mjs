@@ -10,6 +10,7 @@ import {
   CapabilityUndeclaredError,
   CircuitOpenError,
   PermissionManifestError,
+  PluginInterfaceError,
   PluginDependencyError,
   loadCapabilityCatalog,
   validatePermissionManifest,
@@ -117,6 +118,45 @@ test('a broken registry or manifest fails host construction before any spawn', (
     assert.throws(
       () => new CapabilityHost({ grants: ['camera.takePhoto'], root }),
       (err) => err instanceof CapabilityHostError && /derive the capability catalog/.test(err.message),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a mismatched interface contract fails host construction with a distinct code', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'opurom-contract-'));
+  try {
+    const manifest = (name, extra = {}) => ({
+      name,
+      version: '0.1.0',
+      protocol: '1.0',
+      capabilities: [`${name}.cap`],
+      entry: './bin/probe',
+      description: name,
+      ...extra,
+    });
+    const entries = [
+      { name: 'camera', version: '0.1.0', path: 'plugins/camera', capabilities: ['camera.cap'] },
+      { name: 'impl', version: '0.1.0', path: 'plugins/impl', capabilities: ['impl.cap'] },
+    ];
+    writeFileSync(path.join(root, 'registry.json'), JSON.stringify({ version: 1, plugins: entries }));
+    for (const [name, value] of [
+      ['camera', manifest('camera', { interface: { id: 'camera.platform', version: '1.0.0' } })],
+      ['impl', manifest('impl', {
+        implements: 'camera',
+        interface: { id: 'camera.platform', version: '2.0.0' },
+      })],
+    ]) {
+      mkdirSync(path.join(root, 'plugins', name), { recursive: true });
+      writeFileSync(path.join(root, 'plugins', name, 'plugin.json'), JSON.stringify(value));
+    }
+    assert.throws(
+      () => new CapabilityHost({ grants: ['camera.cap'], root }),
+      (err) =>
+        err instanceof PluginInterfaceError &&
+        err.code === 'ERR_PLUGIN_INTERFACE_MISMATCH' &&
+        /camera\.platform@2\.0\.0/.test(err.message),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

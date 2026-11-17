@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   loadRegistry,
+  checkInterfaceContracts,
+  validateInterfaceDeclaration,
   parseBinaryOverrides,
   readManifest,
   resolveEntry,
@@ -318,8 +320,12 @@ test('optional implements and default_package validate as plugin names', () => {
     entry: './bin/camera',
     description: 'Camera access',
   };
-  assert.deepEqual(validateManifest({ ...base, implements: 'camera-platform' }), []);
   assert.deepEqual(validateManifest({ ...base, default_package: 'camera-native' }), []);
+  assert.deepEqual(validateManifest({
+    ...base,
+    implements: 'camera-platform',
+    interface: { id: 'camera.platform', version: '1.0.0' },
+  }), []);
   for (const [manifest, needle] of [
     [{ ...base, implements: 'Camera' }, 'implements'],
     [{ ...base, implements: 'camera' }, 'implement itself'],
@@ -357,6 +363,70 @@ test('old and new manifest formats are mutually exclusive and fail closed', () =
   for (const [manifest, needle] of badPlatforms) {
     assert.ok(validateManifest(manifest).join('; ').includes(needle), needle);
   }
+});
+
+test('interface declarations require a stable id and semver version', () => {
+  assert.deepEqual(validateInterfaceDeclaration({ id: 'camera.platform', version: '1.2.0' }), []);
+  for (const [value, needle] of [
+    [{ id: 'camera.platform' }, 'version'],
+    [{ id: 'Bad', version: '1.0.0' }, 'id'],
+    [{ id: 'a.b', version: '1.0' }, 'version'],
+    [{ id: 'a.b', version: '1.0.0', extra: 1 }, 'unknown field'],
+    [null, 'must be an object'],
+  ]) {
+    assert.ok(validateInterfaceDeclaration(value).join('; ').includes(needle), needle);
+  }
+});
+
+test('an implements declaration without an interface is rejected', () => {
+  const base = {
+    name: 'camera',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    entry: './bin/camera',
+    description: 'Camera access',
+  };
+  assert.match(
+    validateManifest({ ...base, implements: 'camera-platform' }).join('; '),
+    /implements requires an interface declaration/,
+  );
+  assert.deepEqual(
+    validateManifest({
+      ...base,
+      implements: 'camera-platform',
+      interface: { id: 'camera.platform', version: '1.0.0' },
+    }),
+    [],
+  );
+});
+
+test('interface contracts match across an implementing plugin set', () => {
+  const contract = (id, version) => ({ interface: { id, version } });
+  const face = { ...contract('camera.platform', '1.0.0') };
+  const impl = { ...contract('camera.platform', '1.0.0'), implements: 'camera' };
+  assert.deepEqual(checkInterfaceContracts(new Map([['camera', face], ['impl', impl]])), {
+    ok: true,
+    errors: [],
+  });
+
+  const mismatch = checkInterfaceContracts(
+    new Map([
+      ['camera', face],
+      ['impl', { ...contract('camera.platform', '2.0.0'), implements: 'camera' }],
+    ]),
+  );
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.errors[0].kind, 'mismatch');
+  assert.match(mismatch.errors[0].message, /1\.0\.0/);
+
+  const undeclared = checkInterfaceContracts(
+    new Map([['camera', {}], ['impl', { ...impl }]]),
+  );
+  assert.equal(undeclared.errors[0].kind, 'undeclared');
+
+  const missing = checkInterfaceContracts(new Map([['impl', { ...impl }]]));
+  assert.equal(missing.errors[0].kind, 'missing');
 });
 
 test('verifyEntry rejects a registry entry whose manifest is missing', async () => {

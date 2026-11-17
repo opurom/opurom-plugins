@@ -290,7 +290,7 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **107 tests**: 46 protocol, CLI, registry and recovery tests, 22
+`npm test` runs **111 tests**: 49 protocol, CLI, registry and recovery tests, 23
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
 health-snapshot tests, 16 market-client tests, 5 lifecycle tests and 7
 implementation-selection tests.
