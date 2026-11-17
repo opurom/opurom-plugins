@@ -11,6 +11,7 @@ import {
   readManifest,
   resolveEntry,
   resolveManifestEntry,
+  HOST_PLATFORM,
   resolveLoadOrder,
   resolveTimeout,
   validateManifest,
@@ -296,19 +297,47 @@ test('a platforms manifest validates and selects the host executable', () => {
     capabilities: ['camera.takePhoto'],
     description: 'Camera access',
   };
-  const platforms = { macos: { entry: './bin/camera' }, windows: { entry: './bin/camera' } };
-  assert.deepEqual(validateManifest({ ...base, platforms }), []);
   const pluginDir = path.join(ROOT, 'plugins', 'camera');
-  const resolved = resolveManifestEntry(pluginDir, { ...base, platforms });
-  assert.deepEqual(resolved.errors, []);
-  assert.equal(resolved.file, resolveEntry(pluginDir, './bin/camera').file);
-
-  const delegated = { ...base, platforms: { macos: { default_package: 'camera-native' } } };
-  assert.deepEqual(validateManifest(delegated), []);
-  assert.match(
-    resolveManifestEntry(pluginDir, delegated).errors.join('; '),
-    /delegates to default_package/,
+  const expected = resolveEntry(pluginDir, './bin/camera').file;
+  // The six-key table is valid on every host; only the host key is executable.
+  const allPlatforms = Object.fromEntries(
+    ['android', 'ios', 'linux', 'macos', 'web', 'windows'].map((key) => [
+      key,
+      { entry: './bin/camera' },
+    ]),
   );
+  assert.deepEqual(validateManifest({ ...base, platforms: allPlatforms }), []);
+
+  if (HOST_PLATFORM) {
+    const resolved = resolveManifestEntry(pluginDir, { ...base, platforms: allPlatforms });
+    assert.deepEqual(resolved.errors, [], HOST_PLATFORM);
+    assert.equal(resolved.file, expected, HOST_PLATFORM);
+
+    const delegated = {
+      ...base,
+      platforms: { [HOST_PLATFORM]: { default_package: 'camera-native' } },
+    };
+    assert.deepEqual(validateManifest(delegated), []);
+    assert.match(
+      resolveManifestEntry(pluginDir, delegated).errors.join('; '),
+      /delegates to default_package/,
+    );
+
+    // A table without the host key is a valid manifest but not executable here.
+    const otherKey = ['android', 'ios', 'web'].find((key) => key !== HOST_PLATFORM);
+    const missingHost = { ...base, platforms: { [otherKey]: { entry: './bin/camera' } } };
+    assert.deepEqual(validateManifest(missingHost), []);
+    assert.match(
+      resolveManifestEntry(pluginDir, missingHost).errors.join('; '),
+      new RegExp(`no implementation for host platform ${HOST_PLATFORM}`),
+    );
+  } else {
+    // Unsupported host: fail closed rather than picking an arbitrary platform.
+    assert.match(
+      resolveManifestEntry(pluginDir, { ...base, platforms: allPlatforms }).errors.join('; '),
+      /host platform has no plugin executable convention/,
+    );
+  }
 });
 
 test('optional implements and default_package validate as plugin names', () => {
