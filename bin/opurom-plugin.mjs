@@ -12,7 +12,7 @@ import {
   invokeCapability,
   loadRegistry,
   parseBinaryOverrides,
-  resolveEntry,
+  resolveManifestEntry,
   resolveLoadOrder,
   resolveTimeout,
   readManifest,
@@ -229,7 +229,7 @@ async function commandInvoke(root, pluginName, capability, paramParts, options) 
   if (override) {
     binary = path.resolve(root, override);
   } else {
-    const resolved = resolveEntry(pluginDir, manifest.entry);
+    const resolved = resolveManifestEntry(pluginDir, manifest);
     if (resolved.errors.length > 0) fail(resolved.errors.join('; '));
     binary = resolved.file;
     if (!existsSync(binary)) {

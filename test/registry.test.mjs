@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import {
   loadRegistry,
   parseBinaryOverrides,
+  readManifest,
   resolveEntry,
+  resolveManifestEntry,
   resolveLoadOrder,
   resolveTimeout,
   validateManifest,
@@ -268,6 +270,93 @@ test('OPR_PLUGIN_BIN overrides parse into name/path pairs', () => {
   assert.equal(overrides.size, 2);
   assert.equal(parseBinaryOverrides('').size, 0);
   assert.equal(parseBinaryOverrides('garbage').size, 0);
+});
+
+test('legacy manifests validate unchanged with no federated fields', () => {
+  const legacy = {
+    name: 'camera',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    entry: './bin/camera',
+    description: 'Camera access',
+  };
+  assert.deepEqual(validateManifest(legacy), []);
+  const { manifest } = readManifest(path.join(ROOT, 'plugins', 'camera'));
+  assert.deepEqual(validateManifest(manifest), []);
+});
+
+test('a platforms manifest validates and selects the host executable', () => {
+  const base = {
+    name: 'camera',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    description: 'Camera access',
+  };
+  const platforms = { macos: { entry: './bin/camera' }, windows: { entry: './bin/camera' } };
+  assert.deepEqual(validateManifest({ ...base, platforms }), []);
+  const pluginDir = path.join(ROOT, 'plugins', 'camera');
+  const resolved = resolveManifestEntry(pluginDir, { ...base, platforms });
+  assert.deepEqual(resolved.errors, []);
+  assert.equal(resolved.file, resolveEntry(pluginDir, './bin/camera').file);
+
+  const delegated = { ...base, platforms: { macos: { default_package: 'camera-native' } } };
+  assert.deepEqual(validateManifest(delegated), []);
+  assert.match(
+    resolveManifestEntry(pluginDir, delegated).errors.join('; '),
+    /delegates to default_package/,
+  );
+});
+
+test('optional implements and default_package validate as plugin names', () => {
+  const base = {
+    name: 'camera',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    entry: './bin/camera',
+    description: 'Camera access',
+  };
+  assert.deepEqual(validateManifest({ ...base, implements: 'camera-platform' }), []);
+  assert.deepEqual(validateManifest({ ...base, default_package: 'camera-native' }), []);
+  for (const [manifest, needle] of [
+    [{ ...base, implements: 'Camera' }, 'implements'],
+    [{ ...base, implements: 'camera' }, 'implement itself'],
+    [{ ...base, default_package: 'camera' }, 'own default_package'],
+    [{ ...base, default_package: 'bad_name' }, 'default_package'],
+  ]) {
+    assert.ok(validateManifest(manifest).join('; ').includes(needle), needle);
+  }
+});
+
+test('old and new manifest formats are mutually exclusive and fail closed', () => {
+  const base = {
+    name: 'camera',
+    version: '0.1.0',
+    protocol: '1.0',
+    capabilities: ['camera.takePhoto'],
+    description: 'Camera access',
+  };
+  const withEntry = { ...base, entry: './bin/camera' };
+  const withPlatforms = { ...base, platforms: { macos: { entry: './bin/camera' } } };
+  assert.match(
+    validateManifest({ ...withEntry, platforms: withPlatforms.platforms }).join('; '),
+    /cannot be combined/,
+  );
+  assert.match(validateManifest(base).join('; '), /needs entry or platforms/);
+
+  const badPlatforms = [
+    [{ ...withPlatforms, platforms: {} }, 'at least one platform'],
+    [{ ...withPlatforms, platforms: { android: {} } }, 'needs entry or default_package'],
+    [{ ...withPlatforms, platforms: { android: { entry: './b', default_package: 'x' } } }, 'cannot provide an entry'],
+    [{ ...withPlatforms, platforms: { solaris: { entry: './b' } } }, 'unknown platform'],
+    [{ ...withPlatforms, platforms: { macos: { entry: '../escape' } } }, 'traverse'],
+    [{ ...withPlatforms, platforms: { macos: { default_package: 'Bad' } } }, 'default_package'],
+  ];
+  for (const [manifest, needle] of badPlatforms) {
+    assert.ok(validateManifest(manifest).join('; ').includes(needle), needle);
+  }
 });
 
 test('verifyEntry rejects a registry entry whose manifest is missing', async () => {
