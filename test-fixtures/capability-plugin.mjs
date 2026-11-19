@@ -60,7 +60,8 @@ rl.on('line', (line) => {
     // Marker proves the host sent `shutdown` before reaping the process.
     appendFileSync(path.join(stateDir, 'shutdown'), 'yes\n');
     reply({ id: request.id, ok: true, result: null });
-    return;
+    // Exit on the protocol shutdown, not via the host's SIGKILL fallback.
+    process.exit(0);
   }
   if (request.method !== 'invoke') {
     reply({ id: request.id, ok: false, error: 'unknown method' });
