@@ -5,7 +5,7 @@ import test from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CapabilityHost } from '../lib/capabilities.mjs';
+import { CapabilityHost, HostClosedError } from '../lib/capabilities.mjs';
 import { Plugin, PluginCrashError, ROOT, SHUTDOWN_GRACE_MS } from '../lib/host.mjs';
 
 const FIXTURE = path.join(ROOT, 'test-fixtures', 'capability-plugin.mjs');
@@ -88,6 +88,33 @@ test('list reports every registered plugin with Active status and counters', () 
     assert.deepEqual(storage.capabilities, ['storage.put', 'storage.get']);
   } finally {
     host.close();
+  }
+});
+
+test('a closed host rejects new work and close is idempotent', async () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), 'opurom-closed-'));
+  writeFileSync(path.join(stateDir, 'schedule'), 'ok\n');
+  const host = new CapabilityHost({
+    grants: ['camera.takePhoto'],
+    root: ROOT,
+    overrides: new Map([['camera', FIXTURE]]),
+    timeoutMs: 1000,
+    env: {
+      OPR_TEST_STATE_DIR: stateDir,
+      OPR_TEST_PLUGIN: 'camera',
+      OPR_TEST_CAPABILITIES: 'camera.takePhoto',
+    },
+  });
+  try {
+    await host.close();
+    await host.close();
+    await assert.rejects(
+      () => host.invoke('camera.takePhoto'),
+      (err) => err instanceof HostClosedError && err.code === 'ERR_HOST_CLOSED',
+    );
+    assert.equal(host.spawnCount, 0, 'no process is spawned after close');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });
 

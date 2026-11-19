@@ -290,9 +290,9 @@ node --check <every tracked .js and .mjs file>
 ./scripts/build.sh
 ```
 
-`npm test` runs **111 tests**: 49 protocol, CLI, registry and recovery tests, 23
+`npm test` runs **112 tests**: 49 protocol, CLI, registry and recovery tests, 23
 capability-host tests, 4 timeout-configuration tests, 3 audit-trail tests, 3
-health-snapshot tests, 16 market-client tests, 5 lifecycle tests and 7
+health-snapshot tests, 16 market-client tests, 6 lifecycle tests and 7
 implementation-selection tests.
 Files run serially (`--test-concurrency=1`) because the suite shares the
 storage plugin's persisted state and parallel load breaks tight timeout
